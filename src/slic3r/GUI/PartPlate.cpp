@@ -3889,13 +3889,13 @@ int PartPlate::load_gcode_from_file(const std::string& filename)
 	// BBS: use backup path to save temp gcode
     // auto path = get_tmp_gcode_path();
     // if (boost::filesystem::exists(boost::filesystem::path(path))) {
-    //	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": file %1% exists, delete it firstly") % filename.c_str();
+    //	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": file %1% exists, delete it firstly") % filename.c_str();
     //	boost::nowide::remove(path.c_str());
     //}
 
     // std::error_code error = rename_file(filename, path);
     // if (error) {
-    //	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format("Failed to rename the output G-code file from %1% to %2%, error code %3%") % filename.c_str() % path.c_str() %
+    //	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format("Failed to rename the output G-code file from %1% to %2%, error code %3%") % filename.c_str() % path.c_str() %
     //error.message(); 	return -1;
     //}
 	if (boost::filesystem::exists(filename)) {
