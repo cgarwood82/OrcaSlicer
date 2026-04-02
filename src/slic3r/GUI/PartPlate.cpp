@@ -2373,7 +2373,7 @@ bool PartPlate::check_mixture_of_pla_and_petg(const DynamicPrintConfig &config)
                 if (filament_type == "PETG")
                     has_petg = true;
             } else {
-                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << " check error:array bound";
+                BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " check error:array bound";
             }
         }
     }
@@ -2638,7 +2638,7 @@ arrangement::ArrangePolygon PartPlate::estimate_wipe_tower_polygon(const Dynamic
 	if (wipe_tower_brim_width_opt) {
 		wp_brim_width = wipe_tower_brim_width_opt->getFloat();
         if (wp_brim_width < 0) wp_brim_width = WipeTower::get_auto_brim_by_height((float) wt_size.z());
-		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format("arrange wipe_tower: wp_brim_width %1%") % wp_brim_width;
+		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format("arrange wipe_tower: wp_brim_width %1%") % wp_brim_width;
 	}
 
 	x = std::clamp(x, margin, (float)plate_width - w - margin - wp_brim_width);
@@ -2702,9 +2702,9 @@ void PartPlate::set_pos_and_size(Vec3d& origin, int width, int depth, int height
 	bool size_changed = false; //size changed means the machine changed
 	bool pos_changed = false;
 
-	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate_id %1%, before, origin {%2%,%3%,%4%}, plate_width %5%, plate_depth %6%, plate_height %7%")\
+	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate_id %1%, before, origin {%2%,%3%,%4%}, plate_width %5%, plate_depth %6%, plate_height %7%")\
 		% m_plate_index % m_origin.x() % m_origin.y() % m_origin.z() % m_width % m_depth % m_height;
-	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": with_instance_move %1%, after, origin {%2%,%3%,%4%}, plate_width %5%, plate_depth %6%, plate_height %7%")\
+	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": with_instance_move %1%, after, origin {%2%,%3%,%4%}, plate_width %5%, plate_depth %6%, plate_height %7%")\
 		% with_instance_move % origin.x() % origin.y() % origin.z() % width % depth % height;
 	size_changed = ((width != m_width) || (depth != m_depth) || (height != m_height));
 	pos_changed = (m_origin != origin);
@@ -2744,7 +2744,7 @@ void PartPlate::set_pos_and_size(Vec3d& origin, int width, int depth, int height
 			offset.x() = offset.x() + off_x;
 			offset.y() = offset.y() + off_y;
 
-			BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": object %1%, instance %2%, moved {%3%,%4%} to {%5%, %6%}")\
+			BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": object %1%, instance %2%, moved {%3%,%4%} to {%5%, %6%}")\
 				% obj_id % instance_id % off_x % off_y % offset.x() % offset.y();
 
 			instance->set_offset(offset);
@@ -2881,7 +2881,7 @@ bool PartPlate::is_valid_gcode_file()
 		return false;
 	boost::filesystem::path gcode_file(m_gcode_result->filename);
 	if (!boost::filesystem::exists(gcode_file)) {
-		BOOST_LOG_TRIVIAL(warning) << "invalid gcode file, file is missing, file = " << m_gcode_result->filename;
+		BOOST_LOG_TRIVIAL(info) << "invalid gcode file, file is missing, file = " << m_gcode_result->filename;
 		return false;
 	}
 	return true;
@@ -3122,7 +3122,7 @@ int PartPlate::add_instance(int obj_id, int instance_id, bool move_position, Bou
 		m_ready_for_slice = true;
 	}
 
-	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1% , m_ready_for_slice changes to %2%") % m_plate_index %m_ready_for_slice;
+	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1% , m_ready_for_slice changes to %2%") % m_plate_index %m_ready_for_slice;
 	return 0;
 }
 
@@ -3216,7 +3216,7 @@ void PartPlate::duplicate_all_instance(unsigned int dup_count, bool need_skip, s
                 if (skip_objects.find(instance->loaded_id) != skip_objects.end())
                 {
                     instance->printable = false;
-                    BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": skipped object, loaded_id %1%, name %2%, set to unprintable, no need to duplicate") % instance->loaded_id % object->name;
+                    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": skipped object, loaded_id %1%, name %2%, set to unprintable, no need to duplicate") % instance->loaded_id % object->name;
                     continue;
                 }
             }
@@ -3228,7 +3228,7 @@ void PartPlate::duplicate_all_instance(unsigned int dup_count, bool need_skip, s
                 for ( size_t new_instance_id = 0; new_instance_id < newObj->instances.size(); new_instance_id++ )
                 {
                     obj_to_instance_set.emplace(std::pair(new_obj_id, new_instance_id));
-                    BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": duplicate object into plate: index_pair [%1%,%2%], obj_id %3%") % new_obj_id % new_instance_id % newObj->id().id;
+                    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": duplicate object into plate: index_pair [%1%,%2%], obj_id %3%") % new_obj_id % new_instance_id % newObj->id().id;
                 }
             }
         }
@@ -3251,10 +3251,10 @@ void PartPlate::duplicate_all_instance(unsigned int dup_count, bool need_skip, s
                     while (skip_objects.find(instance->loaded_id) != skip_objects.end())
                     {
                         instance->loaded_id ++;
-                        BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": duplicated id %1% with skip, try new one %2%") %instance->id().id  % instance->loaded_id;
+                        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": duplicated id %1% with skip, try new one %2%") %instance->id().id  % instance->loaded_id;
                     }
                 }
-                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": set obj %1% instance %2%'s loaded_id to its id %3%, name %4%") % obj_id %instance_id %instance->loaded_id  % object->name;
+                BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": set obj %1% instance %2%'s loaded_id to its id %3%, name %4%") % obj_id %instance_id %instance->loaded_id  % object->name;
             }
         }
     }
@@ -3576,7 +3576,7 @@ bool PartPlate::set_shape(const Pointfs& shape, const Pointfs& exclude_areas, co
 
 	if ((m_shape == new_shape)&&(m_exclude_area == new_exclude_areas)
 		&&(m_height_to_lid == height_to_lid)&&(m_height_to_rod == height_to_rod)) {
-		BOOST_LOG_TRIVIAL(warning) << "PartPlate same shape, skip directly";
+		BOOST_LOG_TRIVIAL(info) << "PartPlate same shape, skip directly";
 		return false;
 	}
 
@@ -3809,7 +3809,7 @@ void PartPlate::update_states()
 		}
 	}
 
-	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1% , m_ready_for_slice changes to %2%") % m_plate_index %m_ready_for_slice;
+	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1% , m_ready_for_slice changes to %2%") % m_plate_index %m_ready_for_slice;
 	return;
 }
 
@@ -3817,7 +3817,7 @@ void PartPlate::update_states()
 //invalid sliced result
 void PartPlate::update_slice_result_valid_state(bool valid)
 {
-    BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1% , update slice result from %2% to %3%") % m_plate_index %m_slice_result_valid %valid;
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1% , update slice result from %2% to %3%") % m_plate_index %m_slice_result_valid %valid;
     m_slice_result_valid = valid;
     if (valid)
         m_slice_percent = 100.0f;
@@ -3906,7 +3906,7 @@ int PartPlate::load_gcode_from_file(const std::string& filename)
 
 		update_slice_result_valid_state(true);
 
-		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": found valid gcode file %1%") % filename.c_str();
+		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": found valid gcode file %1%") % filename.c_str();
 	}
 	else {
 		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": can not find gcode file %1%") % filename.c_str();
@@ -4237,7 +4237,7 @@ PartPlateList::PartPlateList(int width, int depth, int height, Plater* platerObj
 	:m_plate_width(width), m_plate_depth(depth), m_plate_height(height), m_plater(platerObj), m_model(modelObj), printer_technology(tech),
 	unprintable_plate(this, Vec3d(0.0 + width * (1. + LOGICAL_PART_PLATE_GAP), 0.0, 0.0), width, depth, height, platerObj, modelObj, false, tech)
 {
-	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":plate_width %1%, plate_depth %2%, plate_height %3%") % width % depth % height;
+	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":plate_width %1%, plate_depth %2%, plate_height %3%") % width % depth % height;
 
 	init();
 }
@@ -4658,8 +4658,8 @@ void PartPlateList::reset_size(int width, int depth, int height, bool reload_obj
 {
 	Vec3d origin1, origin2;
 
-	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":before size: plate_width %1%, plate_depth %2%, plate_height %3%") % m_plate_width % m_plate_depth % m_plate_height;
-	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":after size: plate_width %1%, plate_depth %2%, plate_height %3%") % width % depth % height;
+	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":before size: plate_width %1%, plate_depth %2%, plate_height %3%") % m_plate_width % m_plate_depth % m_plate_height;
+	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":after size: plate_width %1%, plate_depth %2%, plate_height %3%") % width % depth % height;
 	if ((m_plate_width != width) || (m_plate_depth != depth) || (m_plate_height != height))
 	{
 		m_plate_width = width;
@@ -4875,7 +4875,7 @@ int PartPlateList::duplicate_plate(int index)
         // go over the instances and pair with the object
         for (size_t new_instance_id = 0; new_instance_id < object_copy->instances.size(); new_instance_id++){
             new_plate->obj_to_instance_set.emplace(std::pair(new_obj_id, new_instance_id));
-            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": duplicate object into plate: index_pair [%1%,%2%], obj_id %3%") % new_obj_id % new_instance_id % object_copy->id().id;
+            BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": duplicate object into plate: index_pair [%1%,%2%], obj_id %3%") % new_obj_id % new_instance_id % object_copy->id().id;
         }
     }
     new_plate->translate_all_instance(plate_to_plate_offset);
@@ -5238,7 +5238,7 @@ void PartPlateList::update_plate_cols()
 	m_plate_count = m_plate_list.size();
 
 	m_plate_cols = compute_colum_count(m_plate_count);
-	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":m_plate_count %1%, m_plate_cols change to %2%") % m_plate_count % m_plate_cols;
+	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":m_plate_count %1%, m_plate_cols change to %2%") % m_plate_count % m_plate_cols;
 	return;
 }
 
@@ -5319,7 +5319,7 @@ int PartPlateList::lock_plate(int index, bool state)
 		BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << boost::format(":can not get plate for index %1%, size %2%") % index % m_plate_list.size();
 		return -1;
 	}
-	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":lock plate %1%, to state %2%") % index % state;
+	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":lock plate %1%, to state %2%") % index % state;
 
 	plate->lock(state);
 
@@ -6237,7 +6237,7 @@ Print& PartPlateList::get_current_fff_print() const
 	Print* print;
 
 	current_plate = m_plate_list[m_current_plate];
-	//BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":m_current_plate %1%, current_plate %2%") % m_current_plate % current_plate;
+	//BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":m_current_plate %1%, current_plate %2%") % m_current_plate % current_plate;
 	assert(current_plate != NULL);
 
 	current_plate->get_print((PrintBase **)&print, nullptr, nullptr);
@@ -6251,7 +6251,7 @@ GCodeProcessorResult* PartPlateList::get_current_slice_result() const
 	PartPlate* current_plate;
 
 	current_plate = m_plate_list[m_current_plate];
-	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":m_current_plate %1%, current_plate %2%") % m_current_plate % current_plate;
+	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":m_current_plate %1%, current_plate %2%") % m_current_plate % current_plate;
 	assert(current_plate != NULL);
 
 	return current_plate->get_slice_result();
@@ -6456,7 +6456,7 @@ int PartPlateList::rebuild_plates_after_deserialize(std::vector<bool>& previous_
 	//not used
 	/*if (m_plate_width == 0)
 	{
-		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": jump to the first init state, need to re-set size!");
+		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": jump to the first init state, need to re-set size!");
 		Vec3d max = m_plater->get_bed().get_bounding_box(false).max;
 		Vec3d min = m_plater->get_bed().get_bounding_box(false).min;
 		double z = m_plater->config()->opt_float("printable_height");
@@ -6470,7 +6470,7 @@ int PartPlateList::rebuild_plates_after_arrangement(bool recycle_plates, bool ex
 {
 	int ret = 0;
 
-	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":before rebuild, plates count %1%, recycle_plates %2%") % m_plate_list.size() % recycle_plates;
+	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":before rebuild, plates count %1%, recycle_plates %2%") % m_plate_list.size() % recycle_plates;
 
 	// sort by arrange_order
 	std::sort(m_model->objects.begin(), m_model->objects.end(), [](auto a, auto b) {return a->instances[0]->arrange_order < b->instances[0]->arrange_order; });
@@ -6487,7 +6487,7 @@ int PartPlateList::rebuild_plates_after_arrangement(bool recycle_plates, bool ex
 				|| !m_plate_list[i]->has_printable_instances())
 			{
 				//delete it
-				BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":delete plate %1% for empty") % i;
+				BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":delete plate %1% for empty") % i;
 				delete_plate(i);
 			}
 			else if (m_plate_list[i]->is_locked()) {
@@ -6507,7 +6507,7 @@ int PartPlateList::rebuild_plates_after_arrangement(bool recycle_plates, bool ex
 	}
 #endif
 
-	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":after rebuild, plates count %1%") % m_plate_list.size();
+	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":after rebuild, plates count %1%") % m_plate_list.size();
 	return ret;
 }
 
@@ -6525,10 +6525,10 @@ int PartPlateList::store_to_3mf_structure(PlateDataPtrs& plate_data_list, bool w
 		plate_data_item->locked = m_plate_list[i]->m_locked;
 		plate_data_item->plate_index = m_plate_list[i]->m_plate_index;
 		plate_data_item->plate_name  = m_plate_list[i]->get_plate_name();
-		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1% before load, width %2%, height %3%, size %4%!")
+		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1% before load, width %2%, height %3%, size %4%!")
 			%(i+1) %m_plate_list[i]->thumbnail_data.width %m_plate_list[i]->thumbnail_data.height %m_plate_list[i]->thumbnail_data.pixels.size();
 		plate_data_item->plate_thumbnail.load_from(m_plate_list[i]->thumbnail_data);
-		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1% after load, width %2%, height %3%, size %4%!")
+		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1% after load, width %2%, height %3%, size %4%!")
 			%(i+1) %plate_data_item->plate_thumbnail.width %plate_data_item->plate_thumbnail.height %plate_data_item->plate_thumbnail.pixels.size();
 		plate_data_item->config.apply(*m_plate_list[i]->config());
 
@@ -6545,7 +6545,7 @@ int PartPlateList::store_to_3mf_structure(PlateDataPtrs& plate_data_list, bool w
 				plate_data_item->objects_and_instances.emplace_back(it->first, it->second);
 		}
 
-		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ <<boost::format(": plate %1%, gcode_filename=%2%, with_slice_info=%3%, slice_valid %4%, object item count %5%.")
+		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ <<boost::format(": plate %1%, gcode_filename=%2%, with_slice_info=%3%, slice_valid %4%, object item count %5%.")
 			%i %m_plate_list[i]->m_gcode_result->filename % with_slice_info %m_plate_list[i]->is_slice_result_valid()%plate_data_item->objects_and_instances.size();
 
 		if (with_slice_info) {
@@ -6578,12 +6578,12 @@ int PartPlateList::store_to_3mf_structure(PlateDataPtrs& plate_data_list, bool w
 						}
 						plate_data_item->is_support_used = print->is_support_used();
 					} else {
-						BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format("print is null!");
+						BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format("print is null!");
 					}
 					//parse filament info
 					plate_data_item->parse_filament_info(m_plate_list[i]->get_slice_result());
 				} else {
-					BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << "slice result = " << m_plate_list[i]->get_slice_result()
+					BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << "slice result = " << m_plate_list[i]->get_slice_result()
 										<< ", result valid = " << m_plate_list[i]->is_slice_result_valid();
 				}
 			}
@@ -6591,7 +6591,7 @@ int PartPlateList::store_to_3mf_structure(PlateDataPtrs& plate_data_list, bool w
 
 		plate_data_list.push_back(plate_data_item);
 	}
-	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":stored %1% plates!") % m_plate_list.size();
+	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":stored %1% plates!") % m_plate_list.size();
 
 	return ret;
 }
@@ -6617,7 +6617,7 @@ int PartPlateList::load_from_3mf_structure(PlateDataPtrs& plate_data_list, int f
 		{
 			BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":plate index %1% seems invalid, skip it")% plate_data_list[i]->plate_index;
 		}
-		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1%, gcode_file %2%, is_sliced_valid %3%, toolpath_outside %4%, is_support_used %5% is_label_object_enabled %6%")
+		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1%, gcode_file %2%, is_sliced_valid %3%, toolpath_outside %4%, is_support_used %5% is_label_object_enabled %6%")
 			%i %plate_data_list[i]->gcode_file %plate_data_list[i]->is_sliced_valid %plate_data_list[i]->toolpath_outside %plate_data_list[i]->is_support_used %plate_data_list[i]->is_label_object_enabled;
 		//load object and instance from 3mf
 		//just test for file correct or not, we will rebuild later
@@ -6646,17 +6646,17 @@ int PartPlateList::load_from_3mf_structure(PlateDataPtrs& plate_data_list, int f
 		gcode_result->warnings = plate_data_list[i]->warnings;
         gcode_result->filament_maps = plate_data_list[i]->filament_maps;
 		if (m_plater && !plate_data_list[i]->thumbnail_file.empty()) {
-			BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1%, load thumbnail from %2%.")%(i+1) %plate_data_list[i]->thumbnail_file;
+			BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1%, load thumbnail from %2%.")%(i+1) %plate_data_list[i]->thumbnail_file;
 			if (boost::filesystem::exists(plate_data_list[i]->thumbnail_file)) {
 				m_plate_list[index]->load_thumbnail_data(plate_data_list[i]->thumbnail_file, m_plate_list[index]->thumbnail_data);
-				BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ <<boost::format(": plate %1% after load, width %2%, height %3%, size %4%!")
+				BOOST_LOG_TRIVIAL(info) << __FUNCTION__ <<boost::format(": plate %1% after load, width %2%, height %3%, size %4%!")
 					%(i+1) %m_plate_list[index]->thumbnail_data.width %m_plate_list[index]->thumbnail_data.height %m_plate_list[index]->thumbnail_data.pixels.size();
 			}
 		}
 
 		if (m_plater && !plate_data_list[i]->no_light_thumbnail_file.empty()) {
 			if (boost::filesystem::exists(plate_data_list[i]->no_light_thumbnail_file)) {
-				BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1%, load no_light_thumbnail_file from %2%.")%(i+1) %plate_data_list[i]->no_light_thumbnail_file;
+				BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1%, load no_light_thumbnail_file from %2%.")%(i+1) %plate_data_list[i]->no_light_thumbnail_file;
 				m_plate_list[index]->load_thumbnail_data(plate_data_list[i]->no_light_thumbnail_file, m_plate_list[index]->no_light_thumbnail_data);
 			}
 		}
@@ -6669,13 +6669,13 @@ int PartPlateList::load_from_3mf_structure(PlateDataPtrs& plate_data_list, int f
 		}*/
 		if (m_plater && !plate_data_list[i]->top_file.empty()) {
 			if (boost::filesystem::exists(plate_data_list[i]->top_file)) {
-				BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1%, load top_thumbnail from %2%.")%(i+1) %plate_data_list[i]->top_file;
+				BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1%, load top_thumbnail from %2%.")%(i+1) %plate_data_list[i]->top_file;
 				m_plate_list[index]->load_thumbnail_data(plate_data_list[i]->top_file, m_plate_list[index]->top_thumbnail_data);
 			}
 		}
 		if (m_plater && !plate_data_list[i]->pick_file.empty()) {
 			if (boost::filesystem::exists(plate_data_list[i]->pick_file)) {
-				BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1%, load pick_thumbnail from %2%.")%(i+1) %plate_data_list[i]->pick_file;
+				BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1%, load pick_thumbnail from %2%.")%(i+1) %plate_data_list[i]->pick_file;
 				m_plate_list[index]->load_thumbnail_data(plate_data_list[i]->pick_file, m_plate_list[index]->pick_thumbnail_data);
 			}
 		}
@@ -7111,7 +7111,7 @@ void PartPlateList::on_extruder_count_changed(int extruder_count)
     for (unsigned int i = 0; i < (unsigned int) m_plate_list.size(); ++i) {
         m_plate_list[i]->on_extruder_count_changed(extruder_count);
     }
-    BOOST_LOG_TRIVIAL(warning) << boost::format("%1%: extruder_count=%2%")% __FUNCTION__ %extruder_count;
+    BOOST_LOG_TRIVIAL(info) << boost::format("%1%: extruder_count=%2%")% __FUNCTION__ %extruder_count;
 }
 
 void PartPlateList::set_filament_count(int filament_count)
@@ -7121,7 +7121,7 @@ void PartPlateList::set_filament_count(int filament_count)
     {
         m_plate_list[i]->set_filament_count(filament_count);
     }
-    BOOST_LOG_TRIVIAL(warning) << boost::format("%1%: filament_count=%2%")% __FUNCTION__ %filament_count;
+    BOOST_LOG_TRIVIAL(info) << boost::format("%1%: filament_count=%2%")% __FUNCTION__ %filament_count;
 }
 
 void PartPlateList::on_filament_added(int filament_count)
@@ -7131,7 +7131,7 @@ void PartPlateList::on_filament_added(int filament_count)
     {
         m_plate_list[i]->on_filament_added();
     }
-    BOOST_LOG_TRIVIAL(warning) << boost::format("%1%: filament_count=%2%")% __FUNCTION__ %filament_count;
+    BOOST_LOG_TRIVIAL(info) << boost::format("%1%: filament_count=%2%")% __FUNCTION__ %filament_count;
 }
 
 void PartPlateList::on_filament_deleted(int filament_count, int filament_id)
@@ -7141,7 +7141,7 @@ void PartPlateList::on_filament_deleted(int filament_count, int filament_id)
     {
         m_plate_list[i]->on_filament_deleted(filament_count, filament_id);
     }
-    BOOST_LOG_TRIVIAL(warning) << boost::format("%1%: filament_count=%2%, filament_id=%3%")% __FUNCTION__ %filament_count %filament_id;
+    BOOST_LOG_TRIVIAL(info) << boost::format("%1%: filament_count=%2%, filament_id=%3%")% __FUNCTION__ %filament_count %filament_id;
 }
 
 }//end namespace GUI
