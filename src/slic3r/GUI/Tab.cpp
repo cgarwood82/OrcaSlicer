@@ -4983,9 +4983,10 @@ void TabPrinter::build_fff()
                 if (auto* o = m_config->option<ConfigOptionString>("ixex_tool_layout")) cur = o->value;
                 for (int i = 0; i < 4; ++i)
                     if (cur == values[i]) { m_ixex_layout_combo->SetSelection(i); break; }
-                m_ixex_layout_combo->Bind(wxEVT_COMBOBOX, [this, values](wxCommandEvent&) {
+                m_ixex_layout_combo->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent&) {
+                    static const char* layout_vals[] = { "front-left", "front-right", "rear-left", "rear-right" };
                     int sel = m_ixex_layout_combo->GetSelection();
-                    std::string val = (sel >= 0 && sel < 4) ? values[sel] : "front-left";
+                    std::string val = (sel >= 0 && sel < 4) ? layout_vals[sel] : "front-left";
                     m_config->set_key_value("ixex_tool_layout", new ConfigOptionString(val));
                     on_value_change("ixex_tool_layout", val);
                     if (m_ixex_modes_ctrl)
