@@ -4592,9 +4592,8 @@ private:
         //   flip_x (layout 1,3): col 0 is on the right (max-X) instead of left
         //   flip_y (layout 2,3): row 0 is at the rear (max-Y) instead of front
         // Display iterates: row from n_rows-1 down to 0 (rear→front = top→bottom).
-        // phys_row = row (loop var maps directly to physical bed Y index).
-        // tool raw index: raw_row = flip_y ? (n_rows-1-row) : row
-        //                 raw_col = flip_x ? (n_cols-1-col) : col
+        // raw_row = flip_y ? (n_rows-1-row) : row
+        // raw_col = flip_x ? (n_cols-1-col) : col
         bool flip_x = (m_layout == 1 || m_layout == 3);
         bool flip_y = (m_layout == 2 || m_layout == 3);
         for (int row = m_n_rows - 1; row >= 0; --row) {
