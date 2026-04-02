@@ -3,6 +3,8 @@
 #include <numeric>
 #include <vector>
 #include <string>
+#include <sstream>
+#include <set>
 #include <regex>
 #include <future>
 #include <GL/glew.h>
@@ -449,6 +451,495 @@ void PartPlate::calc_exclude_triangles(const ExPolygon &poly)
 
     if (!init_model_from_poly(m_exclude_triangles, poly, GROUND_Z))
 		BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ":Unable to create exclude triangles\n";
+}
+
+// Forward declaration (defined later in this file)
+static bool init_model_from_lines(GLModel &model, const Lines &lines, float z);
+
+void PartPlate::calc_ixex_zones()
+{
+    m_ixex_copy_zones.clear();
+    m_ixex_mirror_zones.clear();
+    m_ixex_zone_borders.reset();
+    // Clear blocking vectors at the top so early returns don't leave stale data.
+    m_ixex_secondary_zone_boxes.clear();
+    m_ixex_collision_zones.clear();
+    m_ixex_collision_overlay.clear();
+    m_ixex_margin_overlay.clear();
+
+    if (!wxGetApp().preset_bundle)
+        return;
+
+    const DynamicPrintConfig& printer_cfg = wxGetApp().preset_bundle->printers.get_edited_preset().config;
+    auto* is_ixex_opt = printer_cfg.option<ConfigOptionBool>("is_ixex");
+    if (!is_ixex_opt || !is_ixex_opt->value)
+        return;
+
+    const DynamicPrintConfig& process_cfg = wxGetApp().preset_bundle->prints.get_edited_preset().config;
+    auto* mode_opt = process_cfg.option<ConfigOptionString>("ixex_parallel_mode");
+    std::string active_mode = mode_opt ? mode_opt->value : "primary";
+    if (active_mode == "primary" || active_mode.empty())
+        return;
+
+    // Grid dimensions and tool layout from printer config
+    auto* gantry_opt  = printer_cfg.option<ConfigOptionInt>("ixex_gantry_count");
+    auto* tpg_opt     = printer_cfg.option<ConfigOptionInt>("ixex_tools_per_gantry");
+    auto* layout_opt  = printer_cfg.option<ConfigOptionString>("ixex_tool_layout");
+
+    int n_cols  = tpg_opt    ? std::max(1, tpg_opt->value)    : 2;
+    int n_rows  = gantry_opt ? std::max(1, gantry_opt->value) : 1;
+
+    // Layout: which corner is T0? 0=front-left, 1=front-right, 2=rear-left, 3=rear-right
+    // flip_x: col 0 is right(max-X); flip_y: row 0 is rear(max-Y)
+    std::string layout_str = layout_opt ? layout_opt->value : "front-left";
+    bool flip_x = (layout_str == "front-right" || layout_str == "rear-right");
+    bool flip_y = (layout_str == "rear-left"   || layout_str == "rear-right");
+
+    // Convert tool index to physical (col=X-index, row=Y-index), col/row 0 = min-X/min-Y
+    auto tool_to_phys = [&](int idx) -> std::pair<int,int> {
+        int raw_col = idx % n_cols, raw_row = idx / n_cols;
+        return { flip_x ? (n_cols - 1 - raw_col) : raw_col,
+                 flip_y ? (n_rows - 1 - raw_row) : raw_row };
+    };
+
+    int pri_col = 0, pri_row = 0;
+
+    if (n_cols == 1 && n_rows == 1)
+        return; // nothing to dim with a single zone
+
+    // Look up secondary tool indices (active in mode, but NOT the primary tool)
+    auto* names_opt  = printer_cfg.option<ConfigOptionStrings>("ixex_mode_names");
+    auto* tools_opt  = printer_cfg.option<ConfigOptionStrings>("ixex_mode_active_tools");
+    std::string active_tools_str;
+    if (names_opt && tools_opt) {
+        for (size_t i = 0; i < names_opt->values.size(); ++i) {
+            if (names_opt->values[i] == active_mode && i < tools_opt->values.size()) {
+                active_tools_str = tools_opt->values[i];
+                break;
+            }
+        }
+    }
+
+    // Parse "idx:P/C/M" format → map<tool_idx, state>  (1=Primary, 2=Copy, 3=Mirror)
+    // Backwards compat: plain "idx" → Primary
+    std::map<int,int> tool_states;
+    {
+        std::istringstream ss(active_tools_str);
+        std::string token;
+        while (std::getline(ss, token, ',')) {
+            token.erase(std::remove_if(token.begin(), token.end(), ::isspace), token.end());
+            if (token.empty()) continue;
+            try {
+                auto colon = token.find(':');
+                int idx, state = 1;
+                if (colon != std::string::npos) {
+                    idx = std::stoi(token.substr(0, colon));
+                    char role = std::toupper((unsigned char)token[colon + 1]);
+                    if (role == 'C') state = 2;
+                    else if (role == 'M') state = 3;
+                } else {
+                    idx = std::stoi(token);
+                }
+                if (idx >= 0 && idx < n_rows * n_cols)
+                    tool_states[idx] = state;
+            } catch (...) {}
+        }
+    }
+
+    // Identify the Primary tool from the mode definition
+    for (auto& [idx, state] : tool_states) {
+        if (state == 1) { auto [c, r] = tool_to_phys(idx); pri_col = c; pri_row = r; break; }
+    }
+
+    // Separate copy and mirror secondary cells using physical coordinates
+    std::set<std::pair<int,int>> copy_cells, mirror_cells;
+    for (auto& [idx, state] : tool_states) {
+        auto [c, r] = tool_to_phys(idx);
+        if (c == pri_col && r == pri_row) continue; // skip primary
+        if (state == 2) copy_cells.insert({c, r});
+        else if (state == 3) mirror_cells.insert({c, r});
+    }
+
+    // All active secondary cells combined (for separation axis computation)
+    std::set<std::pair<int,int>> all_secondary;
+    for (auto& p : copy_cells)   all_secondary.insert(p);
+    for (auto& p : mirror_cells) all_secondary.insert(p);
+
+    auto bed_ext = get_extents(m_shape);
+    double x_min = bed_ext.min(0), x_max = bed_ext.max(0);
+    double y_min = bed_ext.min(1), y_max = bed_ext.max(1);
+    double zone_w = (x_max - x_min) / n_cols;
+    double zone_h = (y_max - y_min) / n_rows;
+
+    // Separation axes: row-sep = secondaries on a different gantry, col-sep = different column
+    bool has_row_sep = false, has_col_sep = false;
+    for (const auto& [sc, sr] : all_secondary) {
+        if (sr != pri_row) has_row_sep = true;
+        if (sc != pri_col) has_col_sep = true;
+    }
+
+    // Primary zone extent (the clear printable area):
+    //   row-sep only → full bed width × primary row's Y band
+    //   col-sep only → primary col's X band × full bed height
+    //   both         → primary quadrant
+    auto in_primary_zone = [&](int col, int row) {
+        bool row_ok = !has_row_sep || (row == pri_row);
+        bool col_ok = !has_col_sep || (col == pri_col);
+        return row_ok && col_ok;
+    };
+
+    ExPolygon bed_poly;
+    generate_print_polygon(bed_poly);
+
+    // Build a clipped filled GLModel for an expanded zone rect and push into a vector.
+    auto push_zone_fill = [&](std::vector<GLModel>& vec, double cx0, double cx1, double cy0, double cy1) {
+        ExPolygon cell;
+        cell.contour.append({ scale_(cx0), scale_(cy0) });
+        cell.contour.append({ scale_(cx1), scale_(cy0) });
+        cell.contour.append({ scale_(cx1), scale_(cy1) });
+        cell.contour.append({ scale_(cx0), scale_(cy1) });
+        ExPolygons clipped = intersection_ex({ cell }, { bed_poly });
+        if (!clipped.empty()) {
+            GLModel m;
+            if (init_model_from_poly(m, clipped.front(), GROUND_Z))
+                vec.push_back(std::move(m));
+        }
+    };
+
+    // Build expanded zone rects for a set of cells.
+    // When secondaries share only a row difference (same column as primary) → expand to full X width.
+    // When secondaries share only a column difference → expand to full Y height.
+    // When both axes differ → per-quadrant.
+    struct BoxRect { double x0, x1, y0, y1; };
+    auto make_boxes = [&](const std::set<std::pair<int,int>>& cells) -> std::vector<BoxRect> {
+        std::vector<BoxRect> boxes;
+        if (cells.empty()) return boxes;
+        if (has_row_sep && !has_col_sep) {
+            std::set<int> rows; for (auto& [c,r] : cells) rows.insert(r);
+            for (int sr : rows)
+                boxes.push_back({x_min, x_max, y_min + sr*zone_h, y_min + (sr+1)*zone_h});
+        } else if (has_col_sep && !has_row_sep) {
+            std::set<int> cols; for (auto& [c,r] : cells) cols.insert(c);
+            for (int sc : cols)
+                boxes.push_back({x_min + sc*zone_w, x_min + (sc+1)*zone_w, y_min, y_max});
+        } else {
+            for (auto& [sc,sr] : cells)
+                boxes.push_back({x_min + sc*zone_w, x_min + (sc+1)*zone_w,
+                                 y_min + sr*zone_h,  y_min + (sr+1)*zone_h});
+        }
+        return boxes;
+    };
+
+    // Build fills for copy and mirror zones using expanded boxes (inactive cells not rendered).
+    auto push_expanded_fills = [&](std::vector<GLModel>& vec, const std::set<std::pair<int,int>>& cells) {
+        for (const auto& b : make_boxes(cells))
+            push_zone_fill(vec, b.x0, b.x1, b.y0, b.y1);
+    };
+    push_expanded_fills(m_ixex_copy_zones,   copy_cells);
+    push_expanded_fills(m_ixex_mirror_zones, mirror_cells);
+
+    // White borders: one outline per expanded box of each active secondary type.
+    auto build_rect_lines = [](const std::vector<BoxRect>& boxes) -> Lines {
+        Lines lines;
+        for (const auto& b : boxes) {
+            lines.emplace_back(Point(scale_(b.x0), scale_(b.y0)), Point(scale_(b.x1), scale_(b.y0)));
+            lines.emplace_back(Point(scale_(b.x1), scale_(b.y0)), Point(scale_(b.x1), scale_(b.y1)));
+            lines.emplace_back(Point(scale_(b.x1), scale_(b.y1)), Point(scale_(b.x0), scale_(b.y1)));
+            lines.emplace_back(Point(scale_(b.x0), scale_(b.y1)), Point(scale_(b.x0), scale_(b.y0)));
+        }
+        return lines;
+    };
+
+    // Combine copy+mirror for borders (each expands independently then we collect all lines)
+    Lines all_border_lines = build_rect_lines(make_boxes(copy_cells));
+    auto mirror_border_lines = build_rect_lines(make_boxes(mirror_cells));
+    all_border_lines.insert(all_border_lines.end(), mirror_border_lines.begin(), mirror_border_lines.end());
+
+    if (!all_border_lines.empty())
+        if (!init_model_from_lines(m_ixex_zone_borders, all_border_lines, GROUND_Z_GRIDLINE))
+            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": unable to create iXex zone border lines\n";
+
+    // --- Secondary zone blocking ---
+    // Collect the expanded bounding boxes for all secondary (copy+mirror) zones.
+    // check_outside() uses these to prevent objects being placed outside the primary zone.
+    for (const auto& b : make_boxes(copy_cells))
+        m_ixex_secondary_zone_boxes.push_back(
+            BoundingBoxf3(Vec3d(b.x0, b.y0, -1.0), Vec3d(b.x1, b.y1, 1e4)));
+    for (const auto& b : make_boxes(mirror_cells))
+        m_ixex_secondary_zone_boxes.push_back(
+            BoundingBoxf3(Vec3d(b.x0, b.y0, -1.0), Vec3d(b.x1, b.y1, 1e4)));
+
+    // --- Carriage collision danger strips ---
+    // Only add strips at boundaries of the PRIMARY zone — objects are only placed in the
+    // primary zone, so secondary-to-secondary boundaries have no relevance.
+    //
+    // Strip width is carriage/2 on the primary side only:
+    //   right X boundary: [bnd_x - carriage_w/2, bnd_x]
+    //   left  X boundary: [bnd_x, bnd_x + carriage_w/2]
+    //   top   Y boundary: [bnd_y - carriage_h/2, bnd_y]
+    //   bottom Y boundary:[bnd_y, bnd_y + carriage_h/2]
+    //
+    // Strip length matches the primary zone extent (same expansion logic as make_boxes):
+    //   !has_row_sep → full bed height;  has_row_sep → primary row only
+    //   !has_col_sep → full bed width;   has_col_sep → primary column only
+
+    auto* cw_opt  = printer_cfg.option<ConfigOptionFloat>("ixex_carriage_width_x");
+    auto* ch_opt  = printer_cfg.option<ConfigOptionFloat>("ixex_carriage_width_y");
+    auto* mgn_opt = printer_cfg.option<ConfigOptionFloat>("ixex_carriage_margin");
+    double carriage_w = cw_opt  ? cw_opt->value  : 0.0;
+    double carriage_h = ch_opt  ? ch_opt->value  : 0.0;
+    double margin     = mgn_opt ? mgn_opt->value : 0.0;
+
+    // Helper: build a filled GLModel polygon and push into margin overlay (advisory, non-blocking)
+    auto add_margin_fill = [&](double sx0, double sx1, double sy0, double sy1) {
+        ExPolygon cell;
+        cell.contour.append({ scale_(sx0), scale_(sy0) });
+        cell.contour.append({ scale_(sx1), scale_(sy0) });
+        cell.contour.append({ scale_(sx1), scale_(sy1) });
+        cell.contour.append({ scale_(sx0), scale_(sy1) });
+        ExPolygons clipped = intersection_ex({ cell }, { bed_poly });
+        if (!clipped.empty()) {
+            GLModel m;
+            if (init_model_from_poly(m, clipped.front(), GROUND_Z))
+                m_ixex_margin_overlay.push_back(std::move(m));
+        }
+    };
+
+    // Primary zone extent — mirrors in_primary_zone / make_boxes expansion logic
+    double pz_x0 = has_col_sep ? x_min + pri_col       * zone_w : x_min;
+    double pz_x1 = has_col_sep ? x_min + (pri_col + 1) * zone_w : x_max;
+    double pz_y0 = has_row_sep ? y_min + pri_row        * zone_h : y_min;
+    double pz_y1 = has_row_sep ? y_min + (pri_row + 1)  * zone_h : y_max;
+
+    // Helper: build a BoundingBoxf3 strip, clip to bed, add to members
+    auto add_strip = [&](double sx0, double sx1, double sy0, double sy1) {
+        BoundingBoxf3 box;
+        box.min = Vec3d(sx0, sy0, -1.0);
+        box.max = Vec3d(sx1, sy1,  1e4);
+        m_ixex_collision_zones.push_back(box);
+
+        ExPolygon cell;
+        cell.contour.append({ scale_(sx0), scale_(sy0) });
+        cell.contour.append({ scale_(sx1), scale_(sy0) });
+        cell.contour.append({ scale_(sx1), scale_(sy1) });
+        cell.contour.append({ scale_(sx0), scale_(sy1) });
+        ExPolygons clipped = intersection_ex({ cell }, { bed_poly });
+        if (!clipped.empty()) {
+            GLModel m;
+            if (init_model_from_poly(m, clipped.front(), GROUND_Z))
+                m_ixex_collision_overlay.push_back(std::move(m));
+        }
+    };
+
+    // Determine which directions have mirror secondaries adjacent to the primary.
+    // Only mirror tools can cause carriage collisions — they move toward each other.
+    // Copy tools always move in the same direction, so no collision strip is needed.
+    bool has_right_sec = false, has_left_sec  = false;
+    bool has_top_sec   = false, has_bottom_sec = false;
+    for (auto& [idx, state] : tool_states) {
+        if (state != 3) continue; // only mirror tools (state==3) require collision strips
+        auto [c, r] = tool_to_phys(idx);
+        // X-boundary strips: any mirror in an adjacent column can cause an X collision.
+        if (c == pri_col + 1) has_right_sec  = true;
+        if (c == pri_col - 1) has_left_sec   = true;
+        // Y-boundary strips: only a mirror DIRECTLY above/below (same column) causes a Y collision.
+        // A mirror in a different column that happens to be in an adjacent row is only an X risk.
+        if (r == pri_row + 1 && c == pri_col) has_top_sec    = true;
+        if (r == pri_row - 1 && c == pri_col) has_bottom_sec = true;
+    }
+
+    // X-axis boundaries (vertical strips, width = carriage_w/2 on primary side)
+    if (carriage_w > 0.0) {
+        if (has_right_sec) {
+            double bnd_x = x_min + (pri_col + 1) * zone_w;
+            double strip_inner = bnd_x - carriage_w * 0.5;
+            add_strip(strip_inner, bnd_x, pz_y0, pz_y1);
+            if (margin > 0.0)
+                add_margin_fill(strip_inner - margin, strip_inner, pz_y0, pz_y1);
+        }
+        if (has_left_sec) {
+            double bnd_x = x_min + pri_col * zone_w;
+            double strip_inner = bnd_x + carriage_w * 0.5;
+            add_strip(bnd_x, strip_inner, pz_y0, pz_y1);
+            if (margin > 0.0)
+                add_margin_fill(strip_inner, strip_inner + margin, pz_y0, pz_y1);
+        }
+    }
+
+    // Y-axis boundaries (horizontal strips, width = carriage_h/2 on primary side)
+    if (carriage_h > 0.0) {
+        if (has_top_sec) {
+            double bnd_y = y_min + (pri_row + 1) * zone_h;
+            double strip_inner = bnd_y - carriage_h * 0.5;
+            add_strip(pz_x0, pz_x1, strip_inner, bnd_y);
+            if (margin > 0.0)
+                add_margin_fill(pz_x0, pz_x1, strip_inner - margin, strip_inner);
+        }
+        if (has_bottom_sec) {
+            double bnd_y = y_min + pri_row * zone_h;
+            double strip_inner = bnd_y + carriage_h * 0.5;
+            add_strip(pz_x0, pz_x1, bnd_y, strip_inner);
+            if (margin > 0.0)
+                add_margin_fill(pz_x0, pz_x1, strip_inner, strip_inner + margin);
+        }
+    }
+}
+
+// Build a cache key from the current iXex config options, or "" if iXex is off.
+static std::string build_ixex_cache_key()
+{
+    if (!wxGetApp().preset_bundle)
+        return "";
+    const DynamicPrintConfig& printer_cfg = wxGetApp().preset_bundle->printers.get_edited_preset().config;
+    auto* is_ixex_opt = printer_cfg.option<ConfigOptionBool>("is_ixex");
+    if (!is_ixex_opt || !is_ixex_opt->value)
+        return "";
+    const DynamicPrintConfig& process_cfg = wxGetApp().preset_bundle->prints.get_edited_preset().config;
+    auto* mode_opt  = process_cfg.option<ConfigOptionString>("ixex_parallel_mode");
+    auto* n_col_opt = printer_cfg.option<ConfigOptionInt>("ixex_tools_per_gantry");
+    auto* n_row_opt = printer_cfg.option<ConfigOptionInt>("ixex_gantry_count");
+    auto* cw_opt    = printer_cfg.option<ConfigOptionFloat>("ixex_carriage_width_x");
+    auto* ch_opt    = printer_cfg.option<ConfigOptionFloat>("ixex_carriage_width_y");
+    auto* mgn_opt   = printer_cfg.option<ConfigOptionFloat>("ixex_carriage_margin");
+    return (mode_opt ? mode_opt->value : "primary")
+         + "|" + std::to_string(n_col_opt ? n_col_opt->value : 2)
+         + "x" + std::to_string(n_row_opt ? n_row_opt->value : 1)
+         + "|cw" + std::to_string(cw_opt ? (int)cw_opt->value : 0)
+         + "|ch" + std::to_string(ch_opt ? (int)ch_opt->value : 0)
+         + "|mg" + std::to_string(mgn_opt ? (int)(mgn_opt->value * 10) : 0);
+}
+
+// Ensure zone geometry (secondary boxes, collision strips, visual meshes) is up to date.
+// Called before any collision check AND before rendering so both paths share the same data.
+void PartPlate::ensure_ixex_zones()
+{
+    std::string cache_key = build_ixex_cache_key();
+    if (cache_key != m_ixex_zones_mode_cache) {
+        m_ixex_zones_mode_cache = cache_key;
+        calc_ixex_zones();
+    }
+}
+
+bool PartPlate::has_ixex_placement_violations()
+{
+    ensure_ixex_zones();
+    if (m_ixex_secondary_zone_boxes.empty() && m_ixex_collision_zones.empty())
+        return false;
+    for (const auto& pr : obj_to_instance_set) {
+        int obj_id = pr.first;
+        int instance_id = pr.second;
+        if (!valid_instance(obj_id, instance_id))
+            continue;
+        ModelInstance* instance = m_model->objects[obj_id]->instances[instance_id];
+        Polygon hull = instance->convex_hull_2d();
+        if (hull.points.empty())
+            continue;
+        for (const auto& box : m_ixex_secondary_zone_boxes) {
+            if (!intersection({box.polygon(true)}, {hull}).empty())
+                return true;
+        }
+        for (const auto& strip : m_ixex_collision_zones) {
+            if (!intersection({strip.polygon(true)}, {hull}).empty())
+                return true;
+        }
+    }
+    return false;
+}
+
+void PartPlate::render_ixex_zones(bool force_default_color)
+{
+    if (force_default_color)
+        return;
+
+    ensure_ixex_zones();
+
+    // Read visualization theme from printer config.
+    struct IXexTheme {
+        ColorRGBA copy;     // secondary copy zone fill
+        ColorRGBA mirror;   // secondary mirror zone fill
+        ColorRGBA border;   // zone outline
+        ColorRGBA danger;   // blocking collision strip
+        ColorRGBA margin;   // advisory safety margin
+    };
+
+    // Standard (Okabe-Ito orange + sky blue)
+    static const IXexTheme k_standard = {
+        { 0.337f, 0.706f, 0.914f, 0.45f },   // copy   — sky blue  #56B4E9
+        { 0.902f, 0.624f, 0.000f, 0.45f },   // mirror — orange    #E69F00
+        { 1.000f, 1.000f, 1.000f, 0.90f },   // border — white
+        { 0.850f, 0.100f, 0.100f, 0.55f },   // danger — red
+        { 0.300f, 0.900f, 0.200f, 0.40f },   // margin — lime green
+    };
+    // Deuteranopia / Protanopia: avoids red-green confusion.
+    // Danger strip uses strong blue-violet (red invisible to protanopes).
+    static const IXexTheme k_deuteranopia = {
+        { 0.000f, 0.447f, 0.698f, 0.50f },   // copy   — blue       #0072B2
+        { 0.941f, 0.894f, 0.259f, 0.50f },   // mirror — yellow     #F0E442
+        { 1.000f, 1.000f, 1.000f, 0.90f },   // border — white
+        { 0.200f, 0.100f, 0.800f, 0.65f },   // danger — blue-violet (red not visible)
+        { 0.800f, 0.475f, 0.655f, 0.45f },   // margin — reddish purple #CC79A7
+    };
+    // Tritanopia: avoids blue-yellow confusion.
+    // Copy uses vermilion, mirror uses reddish-purple, margin uses teal.
+    static const IXexTheme k_tritanopia = {
+        { 0.835f, 0.369f, 0.000f, 0.50f },   // copy   — vermilion  #D55E00
+        { 0.800f, 0.475f, 0.655f, 0.50f },   // mirror — reddish purple #CC79A7
+        { 1.000f, 1.000f, 1.000f, 0.90f },   // border — white
+        { 0.850f, 0.100f, 0.100f, 0.55f },   // danger — red (visible to tritanopes)
+        { 0.000f, 0.700f, 0.600f, 0.45f },   // margin — teal
+    };
+    // High contrast: saturated, higher alpha for low-vision users.
+    static const IXexTheme k_high_contrast = {
+        { 0.000f, 0.600f, 1.000f, 0.65f },   // copy   — vivid blue
+        { 1.000f, 0.600f, 0.000f, 0.65f },   // mirror — vivid orange
+        { 1.000f, 1.000f, 0.000f, 1.00f },   // border — bright yellow
+        { 1.000f, 0.000f, 0.000f, 0.75f },   // danger — full red
+        { 0.000f, 1.000f, 0.200f, 0.60f },   // margin — bright green
+    };
+
+    const IXexTheme* theme = &k_standard;
+    if (wxGetApp().preset_bundle) {
+        const DynamicPrintConfig& pcfg = wxGetApp().preset_bundle->printers.get_edited_preset().config;
+        if (auto* t = pcfg.option<ConfigOptionString>("ixex_viz_theme")) {
+            if      (t->value == "deuteranopia")  theme = &k_deuteranopia;
+            else if (t->value == "tritanopia")    theme = &k_tritanopia;
+            else if (t->value == "high_contrast") theme = &k_high_contrast;
+        }
+    }
+
+    // Both fills and border lines use the flat shader already active from render().
+    glsafe(::glDepthMask(GL_FALSE));
+
+    if (!m_ixex_copy_zones.empty())
+        for (GLModel& z : m_ixex_copy_zones)
+            if (z.is_initialized()) { z.set_color(theme->copy); z.render(); }
+
+    if (!m_ixex_mirror_zones.empty())
+        for (GLModel& z : m_ixex_mirror_zones)
+            if (z.is_initialized()) { z.set_color(theme->mirror); z.render(); }
+
+    glsafe(::glDepthMask(GL_TRUE));
+
+    if (m_ixex_zone_borders.is_initialized()) {
+        m_ixex_zone_borders.set_color(theme->border);
+        glsafe(::glLineWidth(2.0f));
+        m_ixex_zone_borders.render();
+        glsafe(::glLineWidth(1.0f));
+    }
+
+    if (!m_ixex_collision_overlay.empty()) {
+        glsafe(::glDepthMask(GL_FALSE));
+        for (GLModel& s : m_ixex_collision_overlay)
+            if (s.is_initialized()) { s.set_color(theme->danger); s.render(); }
+        glsafe(::glDepthMask(GL_TRUE));
+    }
+
+    if (!m_ixex_margin_overlay.empty()) {
+        glsafe(::glDepthMask(GL_FALSE));
+        for (GLModel& b : m_ixex_margin_overlay)
+            if (b.is_initialized()) { b.set_color(theme->margin); b.render(); }
+        glsafe(::glDepthMask(GL_TRUE));
+    }
 }
 
 void PartPlate::calc_triangles_from_polygon(const ExPolygon &poly, GLModel &render_model){
@@ -1882,7 +2373,7 @@ bool PartPlate::check_mixture_of_pla_and_petg(const DynamicPrintConfig &config)
                 if (filament_type == "PETG")
                     has_petg = true;
             } else {
-                BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " check error:array bound";
+                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << " check error:array bound";
             }
         }
     }
@@ -2147,7 +2638,7 @@ arrangement::ArrangePolygon PartPlate::estimate_wipe_tower_polygon(const Dynamic
 	if (wipe_tower_brim_width_opt) {
 		wp_brim_width = wipe_tower_brim_width_opt->getFloat();
         if (wp_brim_width < 0) wp_brim_width = WipeTower::get_auto_brim_by_height((float) wt_size.z());
-		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format("arrange wipe_tower: wp_brim_width %1%") % wp_brim_width;
+		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format("arrange wipe_tower: wp_brim_width %1%") % wp_brim_width;
 	}
 
 	x = std::clamp(x, margin, (float)plate_width - w - margin - wp_brim_width);
@@ -2211,9 +2702,9 @@ void PartPlate::set_pos_and_size(Vec3d& origin, int width, int depth, int height
 	bool size_changed = false; //size changed means the machine changed
 	bool pos_changed = false;
 
-	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate_id %1%, before, origin {%2%,%3%,%4%}, plate_width %5%, plate_depth %6%, plate_height %7%")\
+	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate_id %1%, before, origin {%2%,%3%,%4%}, plate_width %5%, plate_depth %6%, plate_height %7%")\
 		% m_plate_index % m_origin.x() % m_origin.y() % m_origin.z() % m_width % m_depth % m_height;
-	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": with_instance_move %1%, after, origin {%2%,%3%,%4%}, plate_width %5%, plate_depth %6%, plate_height %7%")\
+	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": with_instance_move %1%, after, origin {%2%,%3%,%4%}, plate_width %5%, plate_depth %6%, plate_height %7%")\
 		% with_instance_move % origin.x() % origin.y() % origin.z() % width % depth % height;
 	size_changed = ((width != m_width) || (depth != m_depth) || (height != m_height));
 	pos_changed = (m_origin != origin);
@@ -2253,7 +2744,7 @@ void PartPlate::set_pos_and_size(Vec3d& origin, int width, int depth, int height
 			offset.x() = offset.x() + off_x;
 			offset.y() = offset.y() + off_y;
 
-			BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": object %1%, instance %2%, moved {%3%,%4%} to {%5%, %6%}")\
+			BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": object %1%, instance %2%, moved {%3%,%4%} to {%5%, %6%}")\
 				% obj_id % instance_id % off_x % off_y % offset.x() % offset.y();
 
 			instance->set_offset(offset);
@@ -2390,7 +2881,7 @@ bool PartPlate::is_valid_gcode_file()
 		return false;
 	boost::filesystem::path gcode_file(m_gcode_result->filename);
 	if (!boost::filesystem::exists(gcode_file)) {
-		BOOST_LOG_TRIVIAL(info) << "invalid gcode file, file is missing, file = " << m_gcode_result->filename;
+		BOOST_LOG_TRIVIAL(warning) << "invalid gcode file, file is missing, file = " << m_gcode_result->filename;
 		return false;
 	}
 	return true;
@@ -2469,6 +2960,9 @@ bool PartPlate::contain_instance_totally(int obj_id, int instance_id) const
 //check whether instance is outside the plate or not
 bool PartPlate::check_outside(int obj_id, int instance_id, BoundingBoxf3* bounding_box)
 {
+	// Ensure iXex zone geometry is current before any placement check.
+	ensure_ixex_zones();
+
 	bool outside = true;
 
 	ModelObject* object = m_model->objects[obj_id];
@@ -2511,6 +3005,32 @@ bool PartPlate::check_outside(int obj_id, int instance_id, BoundingBoxf3* boundi
 		else
 			outside = false;
 	}
+
+    // iXex placement check (prepare-mode bounding-box test).
+    // Block objects that overlap secondary (copy/mirror) zones or the carriage
+    // danger strip at the primary zone boundary.  Reuses the existing
+    // outside=true → instance_outside_set → update_states() → blocks slicing path.
+    if (!outside && (!m_ixex_secondary_zone_boxes.empty() || !m_ixex_collision_zones.empty())) {
+        Polygon obj_hull = instance->convex_hull_2d(); // scaled Clipper coords
+        // 1. Object must not touch any secondary zone.
+        for (const auto& box : m_ixex_secondary_zone_boxes) {
+            Polygon p = box.polygon(true);
+            if (!intersection({ p }, { obj_hull }).empty()) {
+                outside = true;
+                break;
+            }
+        }
+        // 2. Object must not enter the carriage danger strip inside the primary zone.
+        if (!outside) {
+            for (const auto& strip : m_ixex_collision_zones) {
+                Polygon strip_poly = strip.polygon(true);
+                if (!intersection({ strip_poly }, { obj_hull }).empty()) {
+                    outside = true;
+                    break;
+                }
+            }
+        }
+    }
 
 	return outside;
 }
@@ -2602,7 +3122,7 @@ int PartPlate::add_instance(int obj_id, int instance_id, bool move_position, Bou
 		m_ready_for_slice = true;
 	}
 
-	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1% , m_ready_for_slice changes to %2%") % m_plate_index %m_ready_for_slice;
+	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1% , m_ready_for_slice changes to %2%") % m_plate_index %m_ready_for_slice;
 	return 0;
 }
 
@@ -2696,7 +3216,7 @@ void PartPlate::duplicate_all_instance(unsigned int dup_count, bool need_skip, s
                 if (skip_objects.find(instance->loaded_id) != skip_objects.end())
                 {
                     instance->printable = false;
-                    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": skipped object, loaded_id %1%, name %2%, set to unprintable, no need to duplicate") % instance->loaded_id % object->name;
+                    BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": skipped object, loaded_id %1%, name %2%, set to unprintable, no need to duplicate") % instance->loaded_id % object->name;
                     continue;
                 }
             }
@@ -2708,7 +3228,7 @@ void PartPlate::duplicate_all_instance(unsigned int dup_count, bool need_skip, s
                 for ( size_t new_instance_id = 0; new_instance_id < newObj->instances.size(); new_instance_id++ )
                 {
                     obj_to_instance_set.emplace(std::pair(new_obj_id, new_instance_id));
-                    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": duplicate object into plate: index_pair [%1%,%2%], obj_id %3%") % new_obj_id % new_instance_id % newObj->id().id;
+                    BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": duplicate object into plate: index_pair [%1%,%2%], obj_id %3%") % new_obj_id % new_instance_id % newObj->id().id;
                 }
             }
         }
@@ -2731,10 +3251,10 @@ void PartPlate::duplicate_all_instance(unsigned int dup_count, bool need_skip, s
                     while (skip_objects.find(instance->loaded_id) != skip_objects.end())
                     {
                         instance->loaded_id ++;
-                        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": duplicated id %1% with skip, try new one %2%") %instance->id().id  % instance->loaded_id;
+                        BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": duplicated id %1% with skip, try new one %2%") %instance->id().id  % instance->loaded_id;
                     }
                 }
-                BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": set obj %1% instance %2%'s loaded_id to its id %3%, name %4%") % obj_id %instance_id %instance->loaded_id  % object->name;
+                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": set obj %1% instance %2%'s loaded_id to its id %3%, name %4%") % obj_id %instance_id %instance->loaded_id  % object->name;
             }
         }
     }
@@ -3056,7 +3576,7 @@ bool PartPlate::set_shape(const Pointfs& shape, const Pointfs& exclude_areas, co
 
 	if ((m_shape == new_shape)&&(m_exclude_area == new_exclude_areas)
 		&&(m_height_to_lid == height_to_lid)&&(m_height_to_rod == height_to_rod)) {
-		BOOST_LOG_TRIVIAL(info) << "PartPlate same shape, skip directly";
+		BOOST_LOG_TRIVIAL(warning) << "PartPlate same shape, skip directly";
 		return false;
 	}
 
@@ -3101,6 +3621,8 @@ bool PartPlate::set_shape(const Pointfs& shape, const Pointfs& exclude_areas, co
 
 			const BoundingBox& pp_bbox = poly.contour.bounding_box();
 			calc_gridlines(poly, pp_bbox);
+			m_ixex_zones_mode_cache = "\x01"; // force rebuild on next render
+			calc_ixex_zones();
 
 			calc_vertex_for_icons(0, m_del_icon);
 			calc_vertex_for_icons(1, m_orient_icon);
@@ -3205,6 +3727,7 @@ void PartPlate::render(const Transform3d& view_matrix, const Transform3d& projec
             render_background(force_background_color);
 
             render_exclude_area(force_background_color);
+            render_ixex_zones(force_background_color);
             if(m_selected && wxGetApp().plater()->get_enable_wrapping_detection()){
                 if(!m_wrapping_detection_triangles.is_initialized()){
                     auto points = get_plate_wrapping_detection_area();
@@ -3286,7 +3809,7 @@ void PartPlate::update_states()
 		}
 	}
 
-	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1% , m_ready_for_slice changes to %2%") % m_plate_index %m_ready_for_slice;
+	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1% , m_ready_for_slice changes to %2%") % m_plate_index %m_ready_for_slice;
 	return;
 }
 
@@ -3294,7 +3817,7 @@ void PartPlate::update_states()
 //invalid sliced result
 void PartPlate::update_slice_result_valid_state(bool valid)
 {
-    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1% , update slice result from %2% to %3%") % m_plate_index %m_slice_result_valid %valid;
+    BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1% , update slice result from %2% to %3%") % m_plate_index %m_slice_result_valid %valid;
     m_slice_result_valid = valid;
     if (valid)
         m_slice_percent = 100.0f;
@@ -3366,13 +3889,13 @@ int PartPlate::load_gcode_from_file(const std::string& filename)
 	// BBS: use backup path to save temp gcode
     // auto path = get_tmp_gcode_path();
     // if (boost::filesystem::exists(boost::filesystem::path(path))) {
-    //	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": file %1% exists, delete it firstly") % filename.c_str();
+    //	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": file %1% exists, delete it firstly") % filename.c_str();
     //	boost::nowide::remove(path.c_str());
     //}
 
     // std::error_code error = rename_file(filename, path);
     // if (error) {
-    //	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format("Failed to rename the output G-code file from %1% to %2%, error code %3%") % filename.c_str() % path.c_str() %
+    //	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format("Failed to rename the output G-code file from %1% to %2%, error code %3%") % filename.c_str() % path.c_str() %
     //error.message(); 	return -1;
     //}
 	if (boost::filesystem::exists(filename)) {
@@ -3383,7 +3906,7 @@ int PartPlate::load_gcode_from_file(const std::string& filename)
 
 		update_slice_result_valid_state(true);
 
-		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": found valid gcode file %1%") % filename.c_str();
+		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": found valid gcode file %1%") % filename.c_str();
 	}
 	else {
 		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": can not find gcode file %1%") % filename.c_str();
@@ -3714,7 +4237,7 @@ PartPlateList::PartPlateList(int width, int depth, int height, Plater* platerObj
 	:m_plate_width(width), m_plate_depth(depth), m_plate_height(height), m_plater(platerObj), m_model(modelObj), printer_technology(tech),
 	unprintable_plate(this, Vec3d(0.0 + width * (1. + LOGICAL_PART_PLATE_GAP), 0.0, 0.0), width, depth, height, platerObj, modelObj, false, tech)
 {
-	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":plate_width %1%, plate_depth %2%, plate_height %3%") % width % depth % height;
+	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":plate_width %1%, plate_depth %2%, plate_height %3%") % width % depth % height;
 
 	init();
 }
@@ -4135,8 +4658,8 @@ void PartPlateList::reset_size(int width, int depth, int height, bool reload_obj
 {
 	Vec3d origin1, origin2;
 
-	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":before size: plate_width %1%, plate_depth %2%, plate_height %3%") % m_plate_width % m_plate_depth % m_plate_height;
-	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":after size: plate_width %1%, plate_depth %2%, plate_height %3%") % width % depth % height;
+	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":before size: plate_width %1%, plate_depth %2%, plate_height %3%") % m_plate_width % m_plate_depth % m_plate_height;
+	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":after size: plate_width %1%, plate_depth %2%, plate_height %3%") % width % depth % height;
 	if ((m_plate_width != width) || (m_plate_depth != depth) || (m_plate_height != height))
 	{
 		m_plate_width = width;
@@ -4352,7 +4875,7 @@ int PartPlateList::duplicate_plate(int index)
         // go over the instances and pair with the object
         for (size_t new_instance_id = 0; new_instance_id < object_copy->instances.size(); new_instance_id++){
             new_plate->obj_to_instance_set.emplace(std::pair(new_obj_id, new_instance_id));
-            BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": duplicate object into plate: index_pair [%1%,%2%], obj_id %3%") % new_obj_id % new_instance_id % object_copy->id().id;
+            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": duplicate object into plate: index_pair [%1%,%2%], obj_id %3%") % new_obj_id % new_instance_id % object_copy->id().id;
         }
     }
     new_plate->translate_all_instance(plate_to_plate_offset);
@@ -4715,7 +5238,7 @@ void PartPlateList::update_plate_cols()
 	m_plate_count = m_plate_list.size();
 
 	m_plate_cols = compute_colum_count(m_plate_count);
-	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":m_plate_count %1%, m_plate_cols change to %2%") % m_plate_count % m_plate_cols;
+	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":m_plate_count %1%, m_plate_cols change to %2%") % m_plate_count % m_plate_cols;
 	return;
 }
 
@@ -4796,7 +5319,7 @@ int PartPlateList::lock_plate(int index, bool state)
 		BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << boost::format(":can not get plate for index %1%, size %2%") % index % m_plate_list.size();
 		return -1;
 	}
-	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":lock plate %1%, to state %2%") % index % state;
+	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":lock plate %1%, to state %2%") % index % state;
 
 	plate->lock(state);
 
@@ -5714,7 +6237,7 @@ Print& PartPlateList::get_current_fff_print() const
 	Print* print;
 
 	current_plate = m_plate_list[m_current_plate];
-	//BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":m_current_plate %1%, current_plate %2%") % m_current_plate % current_plate;
+	//BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":m_current_plate %1%, current_plate %2%") % m_current_plate % current_plate;
 	assert(current_plate != NULL);
 
 	current_plate->get_print((PrintBase **)&print, nullptr, nullptr);
@@ -5728,7 +6251,7 @@ GCodeProcessorResult* PartPlateList::get_current_slice_result() const
 	PartPlate* current_plate;
 
 	current_plate = m_plate_list[m_current_plate];
-	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":m_current_plate %1%, current_plate %2%") % m_current_plate % current_plate;
+	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":m_current_plate %1%, current_plate %2%") % m_current_plate % current_plate;
 	assert(current_plate != NULL);
 
 	return current_plate->get_slice_result();
@@ -5933,7 +6456,7 @@ int PartPlateList::rebuild_plates_after_deserialize(std::vector<bool>& previous_
 	//not used
 	/*if (m_plate_width == 0)
 	{
-		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": jump to the first init state, need to re-set size!");
+		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": jump to the first init state, need to re-set size!");
 		Vec3d max = m_plater->get_bed().get_bounding_box(false).max;
 		Vec3d min = m_plater->get_bed().get_bounding_box(false).min;
 		double z = m_plater->config()->opt_float("printable_height");
@@ -5947,7 +6470,7 @@ int PartPlateList::rebuild_plates_after_arrangement(bool recycle_plates, bool ex
 {
 	int ret = 0;
 
-	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":before rebuild, plates count %1%, recycle_plates %2%") % m_plate_list.size() % recycle_plates;
+	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":before rebuild, plates count %1%, recycle_plates %2%") % m_plate_list.size() % recycle_plates;
 
 	// sort by arrange_order
 	std::sort(m_model->objects.begin(), m_model->objects.end(), [](auto a, auto b) {return a->instances[0]->arrange_order < b->instances[0]->arrange_order; });
@@ -5964,7 +6487,7 @@ int PartPlateList::rebuild_plates_after_arrangement(bool recycle_plates, bool ex
 				|| !m_plate_list[i]->has_printable_instances())
 			{
 				//delete it
-				BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":delete plate %1% for empty") % i;
+				BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":delete plate %1% for empty") % i;
 				delete_plate(i);
 			}
 			else if (m_plate_list[i]->is_locked()) {
@@ -5984,7 +6507,7 @@ int PartPlateList::rebuild_plates_after_arrangement(bool recycle_plates, bool ex
 	}
 #endif
 
-	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":after rebuild, plates count %1%") % m_plate_list.size();
+	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":after rebuild, plates count %1%") % m_plate_list.size();
 	return ret;
 }
 
@@ -6002,10 +6525,10 @@ int PartPlateList::store_to_3mf_structure(PlateDataPtrs& plate_data_list, bool w
 		plate_data_item->locked = m_plate_list[i]->m_locked;
 		plate_data_item->plate_index = m_plate_list[i]->m_plate_index;
 		plate_data_item->plate_name  = m_plate_list[i]->get_plate_name();
-		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1% before load, width %2%, height %3%, size %4%!")
+		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1% before load, width %2%, height %3%, size %4%!")
 			%(i+1) %m_plate_list[i]->thumbnail_data.width %m_plate_list[i]->thumbnail_data.height %m_plate_list[i]->thumbnail_data.pixels.size();
 		plate_data_item->plate_thumbnail.load_from(m_plate_list[i]->thumbnail_data);
-		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1% after load, width %2%, height %3%, size %4%!")
+		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1% after load, width %2%, height %3%, size %4%!")
 			%(i+1) %plate_data_item->plate_thumbnail.width %plate_data_item->plate_thumbnail.height %plate_data_item->plate_thumbnail.pixels.size();
 		plate_data_item->config.apply(*m_plate_list[i]->config());
 
@@ -6022,7 +6545,7 @@ int PartPlateList::store_to_3mf_structure(PlateDataPtrs& plate_data_list, bool w
 				plate_data_item->objects_and_instances.emplace_back(it->first, it->second);
 		}
 
-		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ <<boost::format(": plate %1%, gcode_filename=%2%, with_slice_info=%3%, slice_valid %4%, object item count %5%.")
+		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ <<boost::format(": plate %1%, gcode_filename=%2%, with_slice_info=%3%, slice_valid %4%, object item count %5%.")
 			%i %m_plate_list[i]->m_gcode_result->filename % with_slice_info %m_plate_list[i]->is_slice_result_valid()%plate_data_item->objects_and_instances.size();
 
 		if (with_slice_info) {
@@ -6055,12 +6578,12 @@ int PartPlateList::store_to_3mf_structure(PlateDataPtrs& plate_data_list, bool w
 						}
 						plate_data_item->is_support_used = print->is_support_used();
 					} else {
-						BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format("print is null!");
+						BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format("print is null!");
 					}
 					//parse filament info
 					plate_data_item->parse_filament_info(m_plate_list[i]->get_slice_result());
 				} else {
-					BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << "slice result = " << m_plate_list[i]->get_slice_result()
+					BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << "slice result = " << m_plate_list[i]->get_slice_result()
 										<< ", result valid = " << m_plate_list[i]->is_slice_result_valid();
 				}
 			}
@@ -6068,7 +6591,7 @@ int PartPlateList::store_to_3mf_structure(PlateDataPtrs& plate_data_list, bool w
 
 		plate_data_list.push_back(plate_data_item);
 	}
-	BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(":stored %1% plates!") % m_plate_list.size();
+	BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":stored %1% plates!") % m_plate_list.size();
 
 	return ret;
 }
@@ -6094,7 +6617,7 @@ int PartPlateList::load_from_3mf_structure(PlateDataPtrs& plate_data_list, int f
 		{
 			BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":plate index %1% seems invalid, skip it")% plate_data_list[i]->plate_index;
 		}
-		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1%, gcode_file %2%, is_sliced_valid %3%, toolpath_outside %4%, is_support_used %5% is_label_object_enabled %6%")
+		BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1%, gcode_file %2%, is_sliced_valid %3%, toolpath_outside %4%, is_support_used %5% is_label_object_enabled %6%")
 			%i %plate_data_list[i]->gcode_file %plate_data_list[i]->is_sliced_valid %plate_data_list[i]->toolpath_outside %plate_data_list[i]->is_support_used %plate_data_list[i]->is_label_object_enabled;
 		//load object and instance from 3mf
 		//just test for file correct or not, we will rebuild later
@@ -6123,17 +6646,17 @@ int PartPlateList::load_from_3mf_structure(PlateDataPtrs& plate_data_list, int f
 		gcode_result->warnings = plate_data_list[i]->warnings;
         gcode_result->filament_maps = plate_data_list[i]->filament_maps;
 		if (m_plater && !plate_data_list[i]->thumbnail_file.empty()) {
-			BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1%, load thumbnail from %2%.")%(i+1) %plate_data_list[i]->thumbnail_file;
+			BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1%, load thumbnail from %2%.")%(i+1) %plate_data_list[i]->thumbnail_file;
 			if (boost::filesystem::exists(plate_data_list[i]->thumbnail_file)) {
 				m_plate_list[index]->load_thumbnail_data(plate_data_list[i]->thumbnail_file, m_plate_list[index]->thumbnail_data);
-				BOOST_LOG_TRIVIAL(info) << __FUNCTION__ <<boost::format(": plate %1% after load, width %2%, height %3%, size %4%!")
+				BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ <<boost::format(": plate %1% after load, width %2%, height %3%, size %4%!")
 					%(i+1) %m_plate_list[index]->thumbnail_data.width %m_plate_list[index]->thumbnail_data.height %m_plate_list[index]->thumbnail_data.pixels.size();
 			}
 		}
 
 		if (m_plater && !plate_data_list[i]->no_light_thumbnail_file.empty()) {
 			if (boost::filesystem::exists(plate_data_list[i]->no_light_thumbnail_file)) {
-				BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1%, load no_light_thumbnail_file from %2%.")%(i+1) %plate_data_list[i]->no_light_thumbnail_file;
+				BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1%, load no_light_thumbnail_file from %2%.")%(i+1) %plate_data_list[i]->no_light_thumbnail_file;
 				m_plate_list[index]->load_thumbnail_data(plate_data_list[i]->no_light_thumbnail_file, m_plate_list[index]->no_light_thumbnail_data);
 			}
 		}
@@ -6146,13 +6669,13 @@ int PartPlateList::load_from_3mf_structure(PlateDataPtrs& plate_data_list, int f
 		}*/
 		if (m_plater && !plate_data_list[i]->top_file.empty()) {
 			if (boost::filesystem::exists(plate_data_list[i]->top_file)) {
-				BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1%, load top_thumbnail from %2%.")%(i+1) %plate_data_list[i]->top_file;
+				BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1%, load top_thumbnail from %2%.")%(i+1) %plate_data_list[i]->top_file;
 				m_plate_list[index]->load_thumbnail_data(plate_data_list[i]->top_file, m_plate_list[index]->top_thumbnail_data);
 			}
 		}
 		if (m_plater && !plate_data_list[i]->pick_file.empty()) {
 			if (boost::filesystem::exists(plate_data_list[i]->pick_file)) {
-				BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1%, load pick_thumbnail from %2%.")%(i+1) %plate_data_list[i]->pick_file;
+				BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": plate %1%, load pick_thumbnail from %2%.")%(i+1) %plate_data_list[i]->pick_file;
 				m_plate_list[index]->load_thumbnail_data(plate_data_list[i]->pick_file, m_plate_list[index]->pick_thumbnail_data);
 			}
 		}
@@ -6588,7 +7111,7 @@ void PartPlateList::on_extruder_count_changed(int extruder_count)
     for (unsigned int i = 0; i < (unsigned int) m_plate_list.size(); ++i) {
         m_plate_list[i]->on_extruder_count_changed(extruder_count);
     }
-    BOOST_LOG_TRIVIAL(info) << boost::format("%1%: extruder_count=%2%")% __FUNCTION__ %extruder_count;
+    BOOST_LOG_TRIVIAL(warning) << boost::format("%1%: extruder_count=%2%")% __FUNCTION__ %extruder_count;
 }
 
 void PartPlateList::set_filament_count(int filament_count)
@@ -6598,7 +7121,7 @@ void PartPlateList::set_filament_count(int filament_count)
     {
         m_plate_list[i]->set_filament_count(filament_count);
     }
-    BOOST_LOG_TRIVIAL(info) << boost::format("%1%: filament_count=%2%")% __FUNCTION__ %filament_count;
+    BOOST_LOG_TRIVIAL(warning) << boost::format("%1%: filament_count=%2%")% __FUNCTION__ %filament_count;
 }
 
 void PartPlateList::on_filament_added(int filament_count)
@@ -6608,7 +7131,7 @@ void PartPlateList::on_filament_added(int filament_count)
     {
         m_plate_list[i]->on_filament_added();
     }
-    BOOST_LOG_TRIVIAL(info) << boost::format("%1%: filament_count=%2%")% __FUNCTION__ %filament_count;
+    BOOST_LOG_TRIVIAL(warning) << boost::format("%1%: filament_count=%2%")% __FUNCTION__ %filament_count;
 }
 
 void PartPlateList::on_filament_deleted(int filament_count, int filament_id)
@@ -6618,7 +7141,7 @@ void PartPlateList::on_filament_deleted(int filament_count, int filament_id)
     {
         m_plate_list[i]->on_filament_deleted(filament_count, filament_id);
     }
-    BOOST_LOG_TRIVIAL(info) << boost::format("%1%: filament_count=%2%, filament_id=%3%")% __FUNCTION__ %filament_count %filament_id;
+    BOOST_LOG_TRIVIAL(warning) << boost::format("%1%: filament_count=%2%, filament_id=%3%")% __FUNCTION__ %filament_count %filament_id;
 }
 
 }//end namespace GUI

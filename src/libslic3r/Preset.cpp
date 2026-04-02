@@ -605,6 +605,12 @@ void Preset::save(DynamicPrintConfig* parent_config)
                 ConfigOptionVectorBase* opt_vec_inherit = static_cast<ConfigOptionVectorBase*>(parent_config->option(option));
                 if (opt_vec_src->size() == 1)
                     opt_dst->set(opt_src);
+                else if (opt_vec_src->size() != opt_vec_inherit->size()) {
+                    // Size mismatch (e.g. new multi-extruder profile inheriting from a
+                    // single-extruder base): nil-delta encoding requires matching sizes,
+                    // so fall back to storing the full vector.
+                    opt_dst->set(opt_src);
+                }
                 else if (key_set1->find(option) != key_set1->end()) {
                     opt_vec_dst->set_with_nil(opt_vec_src, opt_vec_inherit, 1);
                 }
@@ -955,6 +961,8 @@ static std::vector<std::string> s_Preset_print_options {
      "enable_wrapping_detection",
      "seam_slope_type", "seam_slope_conditional", "scarf_angle_threshold", "scarf_joint_speed", "scarf_joint_flow_ratio", "seam_slope_start_height", "seam_slope_entire_loop", "seam_slope_min_length", "seam_slope_steps", "seam_slope_inner_walls", "scarf_overhang_threshold",
      "interlocking_beam", "interlocking_orientation", "interlocking_beam_layer_count", "interlocking_depth", "interlocking_boundary_avoidance", "interlocking_beam_width","calib_flowrate_topinfill_special_order",
+     // iXex parallel print mode (per-print selection)
+     "ixex_parallel_mode",
 };
 
 static std::vector<std::string> s_Preset_filament_options {/*"filament_colour", */ "default_filament_colour", "required_nozzle_HRC", "filament_diameter", "pellet_flow_coefficient", "volumetric_speed_coefficients", "filament_type",
@@ -1031,7 +1039,11 @@ static std::vector<std::string> s_Preset_printer_options {
     "cooling_tube_length", "high_current_on_filament_swap", "parking_pos_retraction", "extra_loading_move", "wipe_tower_type", "purge_in_prime_tower", "enable_filament_ramming",
     "z_offset",
     "disable_m73", "preferred_orientation", "emit_machine_limits_to_gcode", "pellet_modded_printer", "support_multi_bed_types", "default_bed_type", "bed_mesh_min","bed_mesh_max","bed_mesh_probe_distance", "adaptive_bed_mesh_margin", "enable_long_retraction_when_cut","long_retractions_when_cut","retraction_distances_when_cut",
-    "bed_temperature_formula", "nozzle_flush_dataset"
+    "bed_temperature_formula", "nozzle_flush_dataset",
+    // iXex (independent X extruder) — printer capability and user-defined modes
+    "is_ixex", "ixex_gantry_count", "ixex_tools_per_gantry", "ixex_tool_layout",
+    "ixex_carriage_width_x", "ixex_carriage_width_y", "ixex_carriage_margin", "ixex_viz_theme",
+    "ixex_mode_names", "ixex_mode_active_tools", "ixex_mode_gcodes"
     };
 
 static std::vector<std::string> s_Preset_sla_print_options {
@@ -1444,6 +1456,12 @@ Preset* PresetCollection::get_preset_differed_for_save(Preset& preset)
                 ConfigOptionVectorBase* opt_vec_inherit = static_cast<ConfigOptionVectorBase*>(parent_preset->config.option(option));
                 if (opt_vec_src->size() == 1)
                     opt_dst->set(opt_src);
+                else if (opt_vec_src->size() != opt_vec_inherit->size()) {
+                    // Size mismatch (e.g. new multi-extruder profile inheriting from a
+                    // single-extruder base): nil-delta encoding requires matching sizes,
+                    // so fall back to storing the full vector.
+                    opt_dst->set(opt_src);
+                }
                 else if (key_set1->find(option) != key_set1->end()) {
                     opt_vec_dst->set_with_nil(opt_vec_src, opt_vec_inherit, 1);
                 }

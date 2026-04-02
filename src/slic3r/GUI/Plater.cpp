@@ -7722,6 +7722,15 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
         q->post_process_string_object_exception(err);
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": validate err=%1%, warning=%2%")%err.string%warning.string;
 
+        // iXex placement check: if objects overlap secondary zones, treat it as a
+        // validation error so the standard pathway handles button state, notifications,
+        // and auto-slice blocking consistently.
+        if (err.string.empty()) {
+            PartPlate* ixex_plate = partplate_list.get_curr_plate();
+            if (ixex_plate && ixex_plate->has_ixex_placement_violations())
+                err.string = _u8L("Cannot slice: objects are in secondary zones reserved for iXex parallel printing.");
+        }
+
         if (err.string.empty()) {
             this->partplate_list.get_curr_plate()->update_apply_result_invalid(false);
             notification_manager->set_all_slicing_errors_gray(true);

@@ -196,6 +196,11 @@ wxPoint OG_CustomCtrl::get_pos(const Line& line, Field* field_in/* = nullptr*/)
             if (line.widget) {
 #ifndef DISABLE_BLINKING
                 h_pos += (line.has_undo_ui() ? 3 : 1) * blinking_button_width;
+#else
+                // When blinking is disabled, widget lines still need to honour
+                // option_label_at_right the same way regular lines do below.
+                if (opt_group->option_label_at_right)
+                    add_buttons_width(blinking_button_width);
 #endif
 
                 for (auto child : line.widget_sizer->GetChildren())

@@ -135,6 +135,14 @@ private:
     GLModel m_logo_triangles;
     GLModel m_gridlines;
     GLModel m_gridlines_bolder;
+    std::vector<GLModel> m_ixex_copy_zones;        // blue tint (Wong #56B4E9)
+    std::vector<GLModel> m_ixex_mirror_zones;      // orange tint (Wong #E69F00)
+    GLModel              m_ixex_zone_borders;      // white outlines around active secondary zones
+    std::vector<BoundingBoxf3> m_ixex_secondary_zone_boxes; // secondary (copy/mirror) zone rects — objects blocked here
+    std::vector<BoundingBoxf3> m_ixex_collision_zones;      // carriage danger strips inside primary zone (mm)
+    std::vector<GLModel>       m_ixex_collision_overlay;    // red-orange rendered fill for danger strips
+    std::vector<GLModel>       m_ixex_margin_overlay;       // amber advisory bands just inside collision strips
+    std::string m_ixex_zones_mode_cache{ "\x01" }; // cached mode+topology key; sentinel = unbuilt
     GLModel m_height_limit_common;
     GLModel m_height_limit_bottom;
     GLModel m_height_limit_top;
@@ -177,6 +185,9 @@ private:
     void calc_triangles_from_polygon(const ExPolygon &poly, GLModel& render_model);
     void calc_gridlines(const ExPolygon& poly, const BoundingBox& pp_bbox);
     void calc_height_limit();
+    void calc_ixex_zones();
+    void ensure_ixex_zones();
+    void render_ixex_zones(bool force_default_color);
     void calc_vertex_for_number(int index, bool one_number, GLModel &buffer);
     void calc_vertex_for_plate_name_edit_icon(GLTexture *texture, int index, PickingModel &model);
     void calc_vertex_for_icons(int index, PickingModel &model);
@@ -432,6 +443,8 @@ public:
     {
         return m_ready_for_slice && !m_apply_invalid;
     }
+    // Returns true if any instance on this plate overlaps an iXex secondary or collision zone.
+    bool has_ixex_placement_violations();
     void update_slice_ready_status(bool ready_slice)
     {
         m_ready_for_slice = ready_slice;

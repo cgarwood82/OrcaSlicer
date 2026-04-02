@@ -41,6 +41,7 @@
 #include "Widgets/RoundedRectangle.hpp"
 #include "Widgets/TextInput.hpp"
 #include "Widgets/CheckBox.hpp" // ORCA
+#include "Widgets/ComboBox.hpp"
 
 class TabCtrl;
 
@@ -463,10 +464,12 @@ public:
 	void		update() override;
 	void		clear_pages() override;
 	bool 		supports_printer_technology(const PrinterTechnology tech) const override { return tech == ptFFF; }
+    void        refresh_ixex_mode_combo();
 
 private:
 	ogStaticText*	m_recommended_thin_wall_thickness_description_line = nullptr;
 	ogStaticText*	m_top_bottom_shell_thickness_explanation = nullptr;
+    ComboBox*       m_ixex_mode_combo {nullptr};
 };
 
 class TabPrintModel : public TabPrint
@@ -588,6 +591,8 @@ public:
     void				set_custom_gcode(const t_config_option_key& opt_key, const std::string& value) override;
 };
 
+class IXexModesCtrl;
+
 class TabPrinter : public Tab
 {
 private:
@@ -602,6 +607,9 @@ private:
     std::vector<PageShp>			m_pages_sla;
 
     wxBoxSizer*         m_presets_sizer                 {nullptr};
+    IXexModesCtrl*      m_ixex_modes_ctrl               {nullptr};
+    ComboBox*           m_ixex_layout_combo             {nullptr};
+    ComboBox*           m_ixex_theme_combo              {nullptr};
 public:
 	ScalableButton*	m_reset_to_filament_color = nullptr;
 

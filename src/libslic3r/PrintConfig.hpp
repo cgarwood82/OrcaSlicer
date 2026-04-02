@@ -63,6 +63,7 @@ enum class WipeTowerType {
     Type2,
 };
 
+
 enum PrintHostType {
     htPrusaLink, htPrusaConnect, htOctoPrint, htDuet, htFlashAir, htAstroBox, htRepetier, htMKS, htESP3D, htCrealityPrint, htObico, htFlashforge, htSimplyPrint, htElegooLink
 };
@@ -496,6 +497,7 @@ CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(GCodeFlavor)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(FuzzySkinType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(FuzzySkinMode)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(WipeTowerType)
+
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(NoiseType)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(InfillPattern)
 CONFIG_OPTION_ENUM_DECLARE_STATIC_MAPS(IroningType)
@@ -1035,6 +1037,9 @@ PRINT_CONFIG_CLASS_DEFINE(
 
     // Orca: internal use only
     ((ConfigOptionBool,  calib_flowrate_topinfill_special_order)) // ORCA: special flag for flow rate calibration
+
+    // iXex parallel print mode (per-print selection, stores mode name or "primary")
+    ((ConfigOptionString,              ixex_parallel_mode))
 )
 
 // This object is mapped to Perl as Slic3r::Config::PrintRegion.
@@ -1332,6 +1337,17 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionStrings,             filament_start_gcode))
     ((ConfigOptionBool,                single_extruder_multi_material))
     ((ConfigOptionBool,                manual_filament_change))
+    // iXex (independent X extruder) — parallel printing support for IDEX/IQEX printers
+    ((ConfigOptionBool,                is_ixex))
+    ((ConfigOptionInt,                 ixex_gantry_count))
+    ((ConfigOptionInt,                 ixex_tools_per_gantry))
+    ((ConfigOptionInt,                 ixex_primary_col))
+    ((ConfigOptionInt,                 ixex_primary_row))
+    ((ConfigOptionFloat,               ixex_carriage_width_x))
+    ((ConfigOptionFloat,               ixex_carriage_width_y))
+    ((ConfigOptionStrings,             ixex_mode_names))
+    ((ConfigOptionStrings,             ixex_mode_active_tools))
+    ((ConfigOptionStrings,             ixex_mode_gcodes))
     ((ConfigOptionBool,                single_extruder_multi_material_priming))
     ((ConfigOptionBool,                wipe_tower_no_sparse_layers))
     ((ConfigOptionString,              change_filament_gcode))

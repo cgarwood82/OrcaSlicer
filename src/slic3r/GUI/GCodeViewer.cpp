@@ -5,6 +5,7 @@
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/Print.hpp"
 #include "libslic3r/Geometry.hpp"
+#include "libslic3r/TriangleMesh.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/Utils.hpp"
 #include "libslic3r/LocalesUtils.hpp"
@@ -43,6 +44,7 @@
 
 #include <array>
 #include <algorithm>
+#include <sstream>
 #include <chrono>
 
 
@@ -911,6 +913,9 @@ void GCodeViewer::SequentialView::render(const bool has_render_path, float legen
         // marker.set_world_offset(current_offset);
         marker.render(canvas_width, canvas_height, view_type);
         marker.render_position_window(viewer, canvas_width, canvas_height, view_type);
+        // iXex secondary carriage markers
+        for (auto& sec : m_ixex_secondary_markers)
+            sec.render(canvas_width, canvas_height, view_type);
     }
 
     //float bottom = wxGetApp().plater()->get_current_canvas3D()->get_canvas_size().get_height();
@@ -965,6 +970,7 @@ void GCodeViewer::init(ConfigOptionMode mode, PresetBundle* preset_bundle)
         }
     }
 
+    m_marker_filename = filename;
     m_sequential_view.marker.init(filename);
 
     // initializes point sizes
@@ -1504,8 +1510,253 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
     const libvgcode::PathVertex& curr_vertex = m_viewer.get_current_vertex();
     m_sequential_view.marker.set_world_position(libvgcode::convert(curr_vertex.position));
     m_sequential_view.marker.set_z_offset(m_z_offset + 0.5f);
+
+    // iXex: compute all carriage positions; update secondary nozzle markers;
+    // carriage_box_draws is populated for toolhead footprint rendering after sequential_view.render().
+    // Okabe-Ito colorblind-safe palette — excludes orange (#E69F00) and sky blue (#56B4E9)
+    // which are used by the bed zone fills, ensuring the markers contrast against the background.
+    static const std::array<ColorRGBA, 4> s_carriage_colors = {{
+        { 1.000f, 1.000f, 1.000f, 0.65f },   // primary      — white
+        { 0.941f, 0.894f, 0.259f, 0.65f },   // secondary 1  — yellow       (#F0E442)
+        { 0.835f, 0.369f, 0.000f, 0.65f },   // secondary 2  — vermilion    (#D55E00)
+        { 0.800f, 0.475f, 0.655f, 0.65f },   // secondary 3  — reddish purple (#CC79A7)
+    }};
+    struct CarriageDraw { Vec3f pos; ColorRGBA color; };
+    std::vector<CarriageDraw> carriage_box_draws;
+    float ixex_box_wx = 0.0f, ixex_box_wy = 0.0f;
+    {
+        PresetBundle* preset_bundle = wxGetApp().preset_bundle;
+        bool ixex_active = false;
+        if (preset_bundle && m_sequential_view.m_show_marker) {
+            const DynamicPrintConfig& printer_cfg = preset_bundle->printers.get_edited_preset().config;
+            auto* is_ixex_opt = printer_cfg.opt<ConfigOptionBool>("is_ixex");
+            if (is_ixex_opt && is_ixex_opt->value) {
+                const DynamicPrintConfig& process_cfg = preset_bundle->prints.get_edited_preset().config;
+                auto* mode_opt = process_cfg.opt<ConfigOptionString>("ixex_parallel_mode");
+                const std::string mode = mode_opt ? mode_opt->value : "primary";
+
+                if (mode != m_ixex_last_mode) {
+                    m_sequential_view.m_ixex_secondary_markers.clear();
+                    m_ixex_last_mode = mode;
+                }
+
+                if (!mode.empty() && mode != "primary") {
+                    auto* mode_names_opt   = printer_cfg.opt<ConfigOptionStrings>("ixex_mode_names");
+                    auto* active_tools_opt = printer_cfg.opt<ConfigOptionStrings>("ixex_mode_active_tools");
+
+                    auto* tpg_opt = printer_cfg.opt<ConfigOptionInt>("ixex_tools_per_gantry");
+                    auto* wx_opt  = printer_cfg.opt<ConfigOptionFloat>("ixex_carriage_width_x");
+                    auto* wy_opt  = printer_cfg.opt<ConfigOptionFloat>("ixex_carriage_width_y");
+                    int tools_per_gantry = tpg_opt ? std::max(1, tpg_opt->value) : 1;
+                    ixex_box_wx = wx_opt ? (float)wx_opt->value : 30.0f;
+                    ixex_box_wy = wy_opt ? (float)wy_opt->value : 30.0f;
+
+                    // Parse "idx:P/C/M" format — matches PartPlate::calc_ixex_zones() exactly.
+                    // Primary = state 1 (P), Copy = 2 (C), Mirror = 3 (M).
+                    // Inactive tools (state 0) are not included in the stored string.
+                    int pri_tool = -1;
+                    std::vector<int> sec_tool_ids;
+                    std::map<int,int> sec_tool_states; // tool_id -> 2=Copy, 3=Mirror
+                    if (mode_names_opt && active_tools_opt) {
+                        for (size_t i = 0; i < mode_names_opt->values.size(); ++i) {
+                            if (i < active_tools_opt->values.size() && mode_names_opt->values[i] == mode) {
+                                std::istringstream ss(active_tools_opt->values[i]);
+                                std::string tok;
+                                while (std::getline(ss, tok, ',')) {
+                                    tok.erase(std::remove_if(tok.begin(), tok.end(), ::isspace), tok.end());
+                                    if (tok.empty()) continue;
+                                    try {
+                                        auto colon = tok.find(':');
+                                        int idx = std::stoi(tok.substr(0, colon != std::string::npos ? colon : tok.size()));
+                                        int state = 1; // default: primary
+                                        if (colon != std::string::npos) {
+                                            char role = std::toupper((unsigned char)tok[colon + 1]);
+                                            if (role == 'C') state = 2;
+                                            else if (role == 'M') state = 3;
+                                        }
+                                        if (state == 1) pri_tool = idx;
+                                        else {
+                                            sec_tool_ids.push_back(idx);
+                                            sec_tool_states[idx] = state;
+                                        }
+                                    } catch (...) {}
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    int sec_count = (int)sec_tool_ids.size();
+
+                    if (sec_count > 0) {
+                        ixex_active = true;
+
+                        // Lazy init secondary nozzle markers
+                        if ((int)m_sequential_view.m_ixex_secondary_markers.size() != sec_count) {
+                            m_sequential_view.m_ixex_secondary_markers.resize(sec_count);
+                            for (int i = 0; i < sec_count; ++i) {
+                                m_sequential_view.m_ixex_secondary_markers[i].init(m_marker_filename);
+                                m_sequential_view.m_ixex_secondary_markers[i].set_color(
+                                    s_carriage_colors[(i + 1) % s_carriage_colors.size()]);
+                            }
+                        }
+
+                        // Bed X and Y bounds — read from the current plate's shape, which is
+                        // in world/GL coordinates (same space as curr_vertex.position), and is
+                        // the exact same source used by PartPlate::calc_ixex_zones().
+                        float bed_x_min, bed_x_max, bed_y_min, bed_y_max;
+                        {
+                            PartPlate* curr_plate = wxGetApp().plater()->get_partplate_list().get_curr_plate();
+                            const Pointfs& plate_shape = curr_plate->get_shape();
+                            if (!plate_shape.empty()) {
+                                bed_x_min = (float)plate_shape[0].x();
+                                bed_x_max = bed_x_min;
+                                bed_y_min = (float)plate_shape[0].y();
+                                bed_y_max = bed_y_min;
+                                for (const auto& pt : plate_shape) {
+                                    bed_x_min = std::min(bed_x_min, (float)pt.x());
+                                    bed_x_max = std::max(bed_x_max, (float)pt.x());
+                                    bed_y_min = std::min(bed_y_min, (float)pt.y());
+                                    bed_y_max = std::max(bed_y_max, (float)pt.y());
+                                }
+                            } else {
+                                // Fallback: use toolpath bounding box extent
+                                bed_x_min = (float)m_paths_bounding_box.min.x();
+                                bed_x_max = (float)m_paths_bounding_box.max.x();
+                                bed_y_min = (float)m_paths_bounding_box.min.y();
+                                bed_y_max = (float)m_paths_bounding_box.max.y();
+                            }
+                        }
+
+                        auto* gc_opt = printer_cfg.opt<ConfigOptionInt>("ixex_gantry_count");
+                        int gantry_count = gc_opt ? std::max(1, gc_opt->value) : 1;
+
+                        // Apply the same flip logic as PartPlate::calc_ixex_zones() so physical
+                        // grid positions match the bed zone visualization.
+                        auto* layout_opt = printer_cfg.opt<ConfigOptionString>("ixex_tool_layout");
+                        const std::string layout_str = layout_opt ? layout_opt->value : "front-left";
+                        const bool flip_x = (layout_str == "front-right" || layout_str == "rear-right");
+                        const bool flip_y = (layout_str == "rear-left"   || layout_str == "rear-right");
+
+                        auto phys_col_of = [&](int tid) -> int {
+                            int raw = tid % tools_per_gantry;
+                            return flip_x ? (tools_per_gantry - 1 - raw) : raw;
+                        };
+                        auto phys_row_of = [&](int tid) -> int {
+                            int raw = tid / tools_per_gantry;
+                            return flip_y ? (gantry_count - 1 - raw) : raw;
+                        };
+
+                        const Vec3f prim_pos         = libvgcode::convert(curr_vertex.position);
+                        const float strip_width      = (bed_x_max - bed_x_min) / (float)tools_per_gantry;
+                        const float row_strip_height = (bed_y_max - bed_y_min) / (float)gantry_count;
+                        const int   pri_phys_col     = (pri_tool >= 0) ? phys_col_of(pri_tool) : 0;
+                        const int   pri_phys_row     = (pri_tool >= 0) ? phys_row_of(pri_tool) : 0;
+
+                        // Pre-pass: for each physical row, find the Copy reference column.
+                        // The primary row's reference is the primary itself.
+                        // Non-primary rows need a Copy tool; Mirror tools on that row
+                        // reflect that Copy's X position.
+                        std::map<int,int> row_copy_col;
+                        row_copy_col[pri_phys_row] = pri_phys_col;
+                        for (int i = 0; i < sec_count; ++i) {
+                            if (sec_tool_states[sec_tool_ids[i]] == 2) {
+                                row_copy_col[phys_row_of(sec_tool_ids[i])] =
+                                    phys_col_of(sec_tool_ids[i]);
+                            }
+                        }
+
+                        // Primary carriage box
+                        carriage_box_draws.push_back({ prim_pos, s_carriage_colors[0] });
+
+                        const float pri_zone_x = bed_x_min + (float)pri_phys_col * strip_width;
+                        const float pri_zone_y = bed_y_min + (float)pri_phys_row * row_strip_height;
+                        const float rel_x      = prim_pos.x() - pri_zone_x;
+                        const float rel_y      = prim_pos.y() - pri_zone_y;
+
+                        for (int i = 0; i < sec_count; ++i) {
+                            int sec_phys_col = phys_col_of(sec_tool_ids[i]);
+                            int sec_phys_row = phys_row_of(sec_tool_ids[i]);
+                            const int sec_state = sec_tool_states[sec_tool_ids[i]];
+
+                            // Y: all tools in a row share a Y rail, so Y is always
+                            // zone-relative copy from the primary.
+                            float sec_zone_y = bed_y_min + (float)sec_phys_row * row_strip_height;
+                            float sec_y      = sec_zone_y + rel_y;
+
+                            // X: Copy places the tool at the same relative position within
+                            // its own zone.  Mirror reflects the Copy reference on this row.
+                            float sec_x;
+                            if (sec_state == 2) {
+                                float sec_zone_x = bed_x_min + (float)sec_phys_col * strip_width;
+                                sec_x = sec_zone_x + rel_x;
+                            } else {
+                                // Mirror: find the Copy on the same row and reflect its X.
+                                auto ref_it = row_copy_col.find(sec_phys_row);
+                                if (ref_it != row_copy_col.end()) {
+                                    float ref_zone_x = bed_x_min + (float)ref_it->second * strip_width;
+                                    float ref_x = ref_zone_x + rel_x;
+                                    sec_x = bed_x_min + bed_x_max - ref_x;
+                                } else {
+                                    sec_x = bed_x_min + bed_x_max - prim_pos.x();
+                                }
+                            }
+
+                            Vec3f sec_pos{ sec_x, sec_y, prim_pos.z() };
+                            m_sequential_view.m_ixex_secondary_markers[i].set_world_position(sec_pos);
+                            m_sequential_view.m_ixex_secondary_markers[i].set_z_offset(m_z_offset + 0.5f);
+                            carriage_box_draws.push_back({
+                                sec_pos, s_carriage_colors[(i + 1) % s_carriage_colors.size()] });
+                        }
+                    }
+                }
+            }
+        }
+        if (!ixex_active)
+            m_sequential_view.m_ixex_secondary_markers.clear();
+    }
+
     // BBS fixed buttom margin. m_moves_slider.pos_y
     m_sequential_view.render(!m_no_render_path, legend_height, &m_viewer, m_viewer.get_current_vertex().gcode_id, canvas_width, canvas_height - bottom_margin * m_scale, right_margin * m_scale, m_viewer.get_view_type());
+
+    // iXex: render toolhead footprint boxes for each active carriage.
+    // Each box is ixex_carriage_width_x × ixex_carriage_width_y, sitting above the nozzle tip.
+    if (!carriage_box_draws.empty() && ixex_box_wx > 0.0f && ixex_box_wy > 0.0f) {
+        // Rebuild box mesh if dimensions changed
+        const Vec2f new_dims{ ixex_box_wx, ixex_box_wy };
+        if (!m_ixex_toolhead_box.is_initialized() || new_dims != m_ixex_toolhead_box_dims) {
+            m_ixex_toolhead_box_dims = new_dims;
+            const float box_h = std::max(ixex_box_wx, ixex_box_wy); // height ~ largest horizontal dim
+            indexed_triangle_set its = its_make_cube((double)ixex_box_wx, (double)ixex_box_wy, (double)box_h);
+            // Center in X and Y; Z starts at 0 (nozzle tip level)
+            for (auto& v : its.vertices)
+                v += Vec3f(-ixex_box_wx * 0.5f, -ixex_box_wy * 0.5f, 0.0f);
+            m_ixex_toolhead_box.init_from(its);
+        }
+
+        GLShaderProgram* shader = wxGetApp().get_shader("gouraud_light");
+        if (shader) {
+            glsafe(::glEnable(GL_BLEND));
+            glsafe(::glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
+            shader->start_using();
+            shader->set_uniform("emission_factor", 0.0f);
+            const Camera& camera = wxGetApp().plater()->get_camera();
+            shader->set_uniform("projection_matrix", camera.get_projection_matrix());
+            const Transform3d& view_matrix = camera.get_view_matrix();
+            for (const auto& draw : carriage_box_draws) {
+                const Transform3d model_matrix = Geometry::translation_transform(
+                    (draw.pos + Vec3f(0.0f, 0.0f, m_z_offset)).cast<double>());
+                shader->set_uniform("view_model_matrix", view_matrix * model_matrix);
+                const Matrix3d view_normal_matrix =
+                    view_matrix.matrix().block(0, 0, 3, 3) *
+                    model_matrix.matrix().block(0, 0, 3, 3).inverse().transpose();
+                shader->set_uniform("view_normal_matrix", view_normal_matrix);
+                m_ixex_toolhead_box.set_color(draw.color);
+                m_ixex_toolhead_box.render();
+            }
+            shader->stop_using();
+            glsafe(::glDisable(GL_BLEND));
+        }
+    }
 
 #if VGCODE_ENABLE_COG_AND_TOOL_MARKERS
     if (is_legend_shown()) {
@@ -2706,6 +2957,7 @@ void GCodeViewer::render_all_plates_stats(const std::vector<const GCodeProcessor
         char buf[64];
         ::sprintf(buf, "%.2f", total_cost_all_plates);
         imgui.text(buf);
+
     }
     ImGui::End();
     ImGui::PopStyleColor(6);

@@ -45,6 +45,7 @@
 
 #include "Widgets/Label.hpp"
 #include "Widgets/TabCtrl.hpp"
+#include "Widgets/ComboBox.hpp"
 #include "MarkdownTip.hpp"
 #include "Search.hpp"
 #include "BedShapeDialog.hpp"
@@ -2673,6 +2674,26 @@ void TabPrint::build()
 
         optgroup->append_single_option_line("timelapse_type", "others_settings_special_mode#timelapse");
         optgroup->append_single_option_line("enable_wrapping_detection");
+        // Dynamic combo box — choices come from the printer preset's ixex_mode_names.
+        // Use create_line_with_widget so the undo bitmaps are set (has_undo_ui()=true),
+        // ensuring the widget x-position matches other option fields in OG_CustomCtrl.
+        create_line_with_widget(optgroup.get(), "ixex_parallel_mode", "", [this](wxWindow* parent) -> wxSizer* {
+            m_ixex_mode_combo = new ComboBox(parent, wxID_ANY, wxEmptyString,
+                                            wxDefaultPosition,
+                                            wxSize(12 * wxGetApp().em_unit(), -1),
+                                            0, nullptr, wxCB_READONLY);
+            m_ixex_mode_combo->GetDropDown().SetUseContentWidth(true);
+            refresh_ixex_mode_combo();
+            m_ixex_mode_combo->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent&) {
+                if (!m_ixex_mode_combo || !m_config) return;
+                std::string val = m_ixex_mode_combo->GetStringSelection().ToStdString();
+                m_config->set_key_value("ixex_parallel_mode", new ConfigOptionString(val));
+                on_value_change("ixex_parallel_mode", val);
+            });
+            auto* s = new wxBoxSizer(wxHORIZONTAL);
+            s->Add(m_ixex_mode_combo, 0, wxALIGN_CENTER_VERTICAL);
+            return s;
+        });
 
         optgroup = page->new_optgroup(L("Fuzzy Skin"), L"fuzzy_skin");
         optgroup->append_single_option_line("fuzzy_skin", "others_settings_fuzzy_skin");
@@ -2731,6 +2752,36 @@ void TabPrint::reload_config()
 {
     this->compatible_widget_reload(m_compatible_printers);
     Tab::reload_config();
+    refresh_ixex_mode_combo();
+}
+
+void TabPrint::refresh_ixex_mode_combo()
+{
+    if (!m_ixex_mode_combo) return;
+    // Rebuild choices: "primary" + names from the active printer preset
+    m_ixex_mode_combo->Clear();
+    m_ixex_mode_combo->Append("primary");
+    if (m_preset_bundle) {
+        auto* names = m_preset_bundle->printers.get_edited_preset().config
+                          .option<ConfigOptionStrings>("ixex_mode_names");
+        if (names) {
+            for (const auto& n : names->values)
+                if (!n.empty()) m_ixex_mode_combo->Append(wxString::FromUTF8(n));
+        }
+    }
+    // Restore current selection from process config (safe: option may not exist in older presets)
+    std::string cur = "primary";
+    if (m_config) {
+        auto* opt = m_config->option<ConfigOptionString>("ixex_parallel_mode");
+        if (opt) cur = opt->value;
+    }
+    if (!m_ixex_mode_combo->SetStringSelection(cur)) {
+        m_ixex_mode_combo->SetSelection(0); // fall back to "primary"
+        // The active mode no longer exists — reset config so stale name doesn't crash downstream.
+        if (m_config)
+            m_config->set_key_value("ixex_parallel_mode", new ConfigOptionString("primary"));
+        on_value_change("ixex_parallel_mode", std::string("primary"));
+    }
 }
 
 void TabPrint::update_description_lines()
@@ -4335,6 +4386,324 @@ void TabPrinter::build()
     m_printer_technology == ptSLA ? build_sla() : build_fff();
 }
 
+// ---------------------------------------------------------------------------
+// IXexModesCtrl — visual parallel-mode editor for the iXex printer tab
+//
+// Tool button states:
+//   0 = Inactive  (grey)   — not participating in this mode
+//   1 = Primary   (green)  — the tool the slicer generates paths for
+//   2 = Copy      (blue)   — firmware duplicates Primary at an offset
+//   3 = Mirror    (amber)  — firmware mirrors Primary about an axis
+//
+// Active-tools string format: "idx:P,idx:C,idx:M"  (backwards-compat: plain "idx" = Primary)
+// ---------------------------------------------------------------------------
+class IXexModesCtrl : public wxPanel {
+public:
+    std::function<void()> on_change;
+
+    // layout: 0=front-left, 1=front-right, 2=rear-left, 3=rear-right (T0 corner)
+    static int parse_layout(const std::string& s) {
+        if (s == "front-right") return 1;
+        if (s == "rear-left")   return 2;
+        if (s == "rear-right")  return 3;
+        return 0; // "front-left" default
+    }
+
+    IXexModesCtrl(wxWindow* parent, int n_cols, int n_rows, int layout = 0)
+        : wxPanel(parent, wxID_ANY), m_n_cols(std::max(1, n_cols)), m_n_rows(std::max(1, n_rows)), m_layout(layout)
+    {
+        m_outer = new wxBoxSizer(wxVERTICAL);
+        m_rows_sizer = new wxBoxSizer(wxVERTICAL);
+
+        // --- Info panel: instruction text + color legend ---
+        auto* info_panel = new wxPanel(this, wxID_ANY);
+        auto* info_sizer = new wxBoxSizer(wxVERTICAL);
+
+        auto* inst = new wxStaticText(info_panel, wxID_ANY,
+            _L("Each mode defines which tool heads participate and their roles. "
+               "The Primary tool (green) drives all sliced paths. "
+               "Copy (blue) and Mirror (amber) tools follow the Primary at the firmware level. "
+               "Click a tool button to cycle its role — clear the Primary before reassigning it."));
+        inst->Wrap(620);
+        info_sizer->Add(inst, 0, wxBOTTOM, 6);
+
+        // Color legend
+        auto* leg_sizer = new wxBoxSizer(wxHORIZONTAL);
+        struct { int state; const char* label; } legend[] = {
+            {1,"Primary"},{2,"Copy"},{3,"Mirror"}
+        };
+        for (auto& l : legend) {
+            auto* swatch = new wxPanel(info_panel, wxID_ANY, wxDefaultPosition, wxSize(12, 12));
+            swatch->SetBackgroundColour(btn_color(l.state));
+            leg_sizer->Add(swatch, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+            leg_sizer->Add(new wxStaticText(info_panel, wxID_ANY, l.label),
+                           0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 16);
+        }
+        info_sizer->Add(leg_sizer, 0, wxBOTTOM, 6);
+        info_panel->SetSizer(info_sizer);
+
+        // Column header row (fixed-pixel spacers to approximately align with mode row fields)
+        // Name field: 130px + 6px gap; Tool grid: n_cols*(36+2)-2 px + 6px gap
+        auto* hdr_panel = new wxPanel(this, wxID_ANY);
+        auto* hdr_sizer = new wxBoxSizer(wxHORIZONTAL);
+        auto* hdr_name  = new wxStaticText(hdr_panel, wxID_ANY, _L("Name"));
+        auto* hdr_tools = new wxStaticText(hdr_panel, wxID_ANY, _L("Tools"));
+        auto* hdr_gcode = new wxStaticText(hdr_panel, wxID_ANY, _L("G-code"));
+        int grid_px = m_n_cols * 38 - 2;  // approx grid panel width
+        hdr_sizer->Add(hdr_name,  0, wxALIGN_CENTER_VERTICAL);
+        hdr_sizer->AddSpacer(std::max(0, 136 - hdr_name->GetBestSize().x));  // "Name" col = 136px total
+        hdr_sizer->Add(hdr_tools, 0, wxALIGN_CENTER_VERTICAL);
+        hdr_sizer->AddSpacer(std::max(0, grid_px + 6 - hdr_tools->GetBestSize().x)); // "Tools" col = grid_px+6 total
+        hdr_sizer->Add(hdr_gcode, 1, wxALIGN_CENTER_VERTICAL);
+        hdr_panel->SetSizer(hdr_sizer);
+
+        auto* add_btn = new wxButton(this, wxID_ANY, _L("+ Add Mode"),
+                                     wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+        add_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { add_row(); notify(); });
+
+        m_outer->Add(info_panel, 0, wxEXPAND | wxBOTTOM, 4);
+        m_outer->Add(hdr_panel, 0, wxEXPAND | wxBOTTOM, 2);
+        m_outer->Add(m_rows_sizer, 0, wxEXPAND);
+        m_outer->AddSpacer(4);
+        m_outer->Add(add_btn, 0);
+        SetSizer(m_outer);
+    }
+
+    void set_grid_size(int n_cols, int n_rows, int layout = -1) {
+        n_cols = std::max(1, n_cols);
+        n_rows = std::max(1, n_rows);
+        if (layout < 0) layout = m_layout;
+        if (n_cols == m_n_cols && n_rows == m_n_rows && layout == m_layout) return;
+        auto [names, tools, gcodes] = get_mode_data();
+        clear_rows();
+        m_n_cols = n_cols;
+        m_n_rows = n_rows;
+        m_layout = layout;
+        for (size_t i = 0; i < names.size(); ++i)
+            add_row(names[i], tools[i], gcodes[i]);
+        Layout();
+    }
+
+    void load_from_config(const DynamicPrintConfig& cfg) {
+        clear_rows();
+        auto* names  = cfg.option<ConfigOptionStrings>("ixex_mode_names");
+        auto* tools  = cfg.option<ConfigOptionStrings>("ixex_mode_active_tools");
+        auto* gcodes = cfg.option<ConfigOptionStrings>("ixex_mode_gcodes");
+        size_t n = names ? names->values.size() : 0;
+        for (size_t i = 0; i < n; ++i)
+            add_row(names->values[i],
+                    (tools  && i < tools->values.size())  ? tools->values[i]  : "",
+                    (gcodes && i < gcodes->values.size()) ? gcodes->values[i] : "");
+        Layout();
+    }
+
+    std::tuple<std::vector<std::string>, std::vector<std::string>, std::vector<std::string>>
+    get_mode_data() const {
+        std::vector<std::string> names, tools, gcodes;
+        for (auto& r : m_rows) {
+            std::string nm = r.name->GetValue().ToStdString();
+            if (nm.empty()) continue;
+            names.push_back(nm);
+            tools.push_back(active_tools_string(r));
+            gcodes.push_back(r.gcode->GetValue().ToStdString());
+        }
+        return {names, tools, gcodes};
+    }
+
+    // Parse "idx:P,idx:C,idx:M" → map<tool_idx, state>
+    // Backwards compat: plain "idx" (no role) → state 1 (Primary)
+    static std::map<int,int> parse_tool_states(const std::string& s) {
+        std::map<int,int> result;
+        if (s.empty()) return result;
+        std::istringstream ss(s);
+        std::string tok;
+        while (std::getline(ss, tok, ',')) {
+            tok.erase(std::remove_if(tok.begin(), tok.end(), ::isspace), tok.end());
+            if (tok.empty()) continue;
+            try {
+                auto colon = tok.find(':');
+                int idx, state = 1;
+                if (colon != std::string::npos) {
+                    idx = std::stoi(tok.substr(0, colon));
+                    char role = std::toupper((unsigned char)tok[colon + 1]);
+                    if (role == 'C') state = 2;
+                    else if (role == 'M') state = 3;
+                } else {
+                    idx = std::stoi(tok);
+                }
+                result[idx] = state;
+            } catch (...) {}
+        }
+        return result;
+    }
+
+private:
+    // State 0=inactive, 1=primary, 2=copy, 3=mirror
+    static wxColour btn_color(int state) {
+        switch (state) {
+        case 1:  return wxColour(50,  160, 50);   // green  — Primary
+        case 2:  return wxColour(60,  120, 210);  // blue   — Copy
+        case 3:  return wxColour(210, 130, 20);   // amber  — Mirror
+        default: return wxColour(90,  90,  90);   // grey   — Inactive
+        }
+    }
+    static wxColour btn_fg(int /*state*/) { return *wxWHITE; }
+    static const char* state_role(int state) {
+        switch (state) { case 1: return "P"; case 2: return "C"; case 3: return "M"; default: return ""; }
+    }
+
+    void apply_btn(wxButton* btn, int tool_idx, int state) {
+        // Always label as T{n} — the button color already encodes the role.
+        btn->SetLabel(wxString::Format("T%d", tool_idx));
+        btn->SetBackgroundColour(btn_color(state));
+        btn->SetForegroundColour(btn_fg(state));
+        btn->Refresh();
+    }
+
+    struct Row {
+        wxPanel*             panel;
+        wxTextCtrl*          name;
+        wxTextCtrl*          gcode;
+        std::vector<wxButton*> btns;
+        std::vector<int>     btn_states; // parallel to btns
+        // tool_idx for btns[i]: computed during add_row, stored here for quick lookup
+        std::vector<int>     btn_tool_idx;
+    };
+
+    void add_row(const std::string& name = "",
+                 const std::string& active_tools = "",
+                 const std::string& gcode = "")
+    {
+        Row r;
+        r.panel = new wxPanel(this, wxID_ANY);
+        auto* sizer = new wxBoxSizer(wxHORIZONTAL);
+
+        r.name = new wxTextCtrl(r.panel, wxID_ANY, name, wxDefaultPosition, wxSize(130, -1));
+        r.name->Bind(wxEVT_TEXT, [this](wxCommandEvent&) { notify(); });
+
+        auto* grid_panel = new wxPanel(r.panel, wxID_ANY);
+        auto* grid_sizer = new wxGridSizer(m_n_rows, m_n_cols, 2, 2);
+
+        auto tool_states = parse_tool_states(active_tools);
+        wxPanel* this_panel = r.panel;
+
+        // Buttons rendered top=rear (high Y), bottom=front (low Y).
+        // Layout remapping: m_layout encodes which corner T0 is at physically.
+        //   flip_x (layout 1,3): col 0 is on the right (max-X) instead of left
+        //   flip_y (layout 2,3): row 0 is at the rear (max-Y) instead of front
+        // Display iterates: row from n_rows-1 down to 0 (rear→front = top→bottom).
+        // phys_row = row (loop var maps directly to physical bed Y index).
+        // tool raw index: raw_row = flip_y ? (n_rows-1-row) : row
+        //                 raw_col = flip_x ? (n_cols-1-col) : col
+        bool flip_x = (m_layout == 1 || m_layout == 3);
+        bool flip_y = (m_layout == 2 || m_layout == 3);
+        for (int row = m_n_rows - 1; row >= 0; --row) {
+            for (int col = 0; col < m_n_cols; ++col) {
+                int raw_row = flip_y ? (m_n_rows - 1 - row) : row;
+                int raw_col = flip_x ? (m_n_cols - 1 - col) : col;
+                int tool_idx = raw_row * m_n_cols + raw_col;
+                int state = 0;
+                auto it = tool_states.find(tool_idx);
+                if (it != tool_states.end()) state = it->second;
+
+                auto* btn = new wxButton(grid_panel, wxID_ANY, wxEmptyString,
+                                         wxDefaultPosition, wxSize(36, 26), wxBU_EXACTFIT);
+                apply_btn(btn, tool_idx, state);
+
+                int btn_pos = (int)r.btns.size();
+                r.btns.push_back(btn);
+                r.btn_states.push_back(state);
+                r.btn_tool_idx.push_back(tool_idx);
+
+                btn->Bind(wxEVT_BUTTON, [this, this_panel, btn_pos](wxCommandEvent&) {
+                    // Find the row by panel pointer (stable across add/remove)
+                    for (auto& row_ref : m_rows) {
+                        if (row_ref.panel != this_panel) continue;
+                        int& st = row_ref.btn_states[btn_pos];
+
+                        // Check if another button already holds the Primary state
+                        bool other_primary = false;
+                        for (int j = 0; j < (int)row_ref.btn_states.size(); ++j)
+                            if (j != btn_pos && row_ref.btn_states[j] == 1) { other_primary = true; break; }
+
+                        // Advance state, skipping Primary(1) if another tool is already Primary
+                        st = (st + 1) % 4;
+                        if (st == 1 && other_primary)
+                            st = 2; // skip Primary → go straight to Copy
+
+                        apply_btn(row_ref.btns[btn_pos], row_ref.btn_tool_idx[btn_pos], st);
+                        notify();
+                        break;
+                    }
+                });
+
+                grid_sizer->Add(btn, 0);
+            }
+        }
+        grid_panel->SetSizer(grid_sizer);
+
+        r.gcode = new wxTextCtrl(r.panel, wxID_ANY, gcode,
+                                 wxDefaultPosition, wxSize(220, 54), wxTE_MULTILINE);
+        r.gcode->Bind(wxEVT_TEXT, [this](wxCommandEvent&) { notify(); });
+
+        auto* rm = new wxButton(r.panel, wxID_ANY, wxT("\u00d7"),
+                                wxDefaultPosition, wxSize(24, 24), wxBU_EXACTFIT);
+        rm->Bind(wxEVT_BUTTON, [this, this_panel](wxCommandEvent&) {
+            remove_row(this_panel);
+            notify();
+        });
+
+        sizer->Add(r.name,    0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        sizer->Add(grid_panel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        sizer->Add(r.gcode,   1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        sizer->Add(rm,        0, wxALIGN_CENTER_VERTICAL);
+        r.panel->SetSizer(sizer);
+
+        m_rows_sizer->Add(r.panel, 0, wxEXPAND | wxBOTTOM, 4);
+        m_rows.push_back(std::move(r));
+        Layout();
+    }
+
+    void remove_row(wxPanel* panel) {
+        for (size_t i = 0; i < m_rows.size(); ++i) {
+            if (m_rows[i].panel == panel) {
+                m_rows_sizer->Detach(panel);
+                m_rows.erase(m_rows.begin() + i);
+                Layout();
+                // Defer widget destruction so any in-flight GTK events for
+                // panel's children (including the × button we're inside) finish
+                // processing before the wxEvtHandlers are freed.
+                wxTheApp->CallAfter([panel]() { panel->Destroy(); });
+                return;
+            }
+        }
+    }
+
+    void clear_rows() {
+        for (auto& r : m_rows) { m_rows_sizer->Detach(r.panel); r.panel->Destroy(); }
+        m_rows.clear();
+    }
+
+    std::string active_tools_string(const Row& r) const {
+        std::string s;
+        for (size_t i = 0; i < r.btn_states.size(); ++i) {
+            if (r.btn_states[i] == 0) continue;
+            if (!s.empty()) s += ',';
+            s += std::to_string(r.btn_tool_idx[i]) + ':' + state_role(r.btn_states[i]);
+        }
+        return s;
+    }
+
+    void notify() { if (on_change) on_change(); }
+
+    wxBoxSizer*      m_outer;
+    wxBoxSizer*      m_rows_sizer;
+    std::vector<Row> m_rows;
+    int              m_n_cols, m_n_rows;
+    int              m_layout {0}; // 0=front-left, 1=front-right, 2=rear-left, 3=rear-right
+};
+// ---------------------------------------------------------------------------
+
 void TabPrinter::build_fff()
 {
     if (!m_pages.empty())
@@ -4588,6 +4957,117 @@ void TabPrinter::build_fff()
         option.opt.is_code = true;
         option.opt.height = gcode_field_height;//150;
         optgroup->append_single_option_line(option, "printer_machine_gcode#template-custom-g-code");
+
+    page = add_options_page(L("iXex"), "custom-gcode_multi_material"); // ORCA: icon only visible on placeholders
+        optgroup = page->new_optgroup(L("Carriage Configuration"), L"param_advanced");
+        optgroup->append_single_option_line("is_ixex");
+        optgroup->append_single_option_line("ixex_gantry_count");
+        optgroup->append_single_option_line("ixex_tools_per_gantry");
+        {
+            // Tool 0 corner selector
+            auto opt = optgroup->get_option("ixex_tool_layout");
+            auto line = Line{ opt.opt.label, opt.opt.tooltip };
+            line.append_option(opt);
+            line.widget = [this](wxWindow* parent) -> wxSizer* {
+                static const wxString choices[] = {
+                    _L("Front-left"), _L("Front-right"),
+                    _L("Rear-left"), _L("Rear-right")
+                };
+                static const char* values[] = { "front-left", "front-right", "rear-left", "rear-right" };
+                m_ixex_layout_combo = new ComboBox(parent, wxID_ANY, wxEmptyString,
+                                                   wxDefaultPosition,
+                                                   wxSize(12 * wxGetApp().em_unit(), -1),
+                                                   4, choices, wxCB_READONLY);
+                m_ixex_layout_combo->GetDropDown().SetUseContentWidth(true);
+                // Set current selection
+                std::string cur = "front-left";
+                if (auto* o = m_config->option<ConfigOptionString>("ixex_tool_layout")) cur = o->value;
+                for (int i = 0; i < 4; ++i)
+                    if (cur == values[i]) { m_ixex_layout_combo->SetSelection(i); break; }
+                m_ixex_layout_combo->Bind(wxEVT_COMBOBOX, [this, values](wxCommandEvent&) {
+                    int sel = m_ixex_layout_combo->GetSelection();
+                    std::string val = (sel >= 0 && sel < 4) ? values[sel] : "front-left";
+                    m_config->set_key_value("ixex_tool_layout", new ConfigOptionString(val));
+                    on_value_change("ixex_tool_layout", val);
+                    if (m_ixex_modes_ctrl)
+                        m_ixex_modes_ctrl->set_grid_size(
+                            m_config->opt_int("ixex_tools_per_gantry"),
+                            m_config->opt_int("ixex_gantry_count"),
+                            IXexModesCtrl::parse_layout(val));
+                });
+                auto* s = new wxBoxSizer(wxHORIZONTAL);
+                s->Add(m_ixex_layout_combo, 0, wxALIGN_CENTER_VERTICAL);
+                return s;
+            };
+            optgroup->append_line(line);
+        }
+        optgroup->append_single_option_line("ixex_carriage_width_x");
+        optgroup->append_single_option_line("ixex_carriage_width_y");
+        optgroup->append_single_option_line("ixex_carriage_margin");
+
+        {
+            static const wxString theme_choices[] = {
+                _L("Standard"),
+                _L("Deuteranopia / Protanopia (red-green)"),
+                _L("Tritanopia (blue-yellow)"),
+                _L("High Contrast") };
+            static const char* theme_vals[] = { "standard", "deuteranopia", "tritanopia", "high_contrast" };
+            auto opt  = optgroup->get_option("ixex_viz_theme");
+            auto line = Line{ opt.opt.label, opt.opt.tooltip };
+            line.append_option(opt);
+            line.widget = [this](wxWindow* parent) -> wxSizer* {
+                m_ixex_theme_combo = new ComboBox(parent, wxID_ANY, wxEmptyString,
+                                                  wxDefaultPosition,
+                                                  wxSize(22 * wxGetApp().em_unit(), -1),
+                                                  4, theme_choices, wxCB_READONLY);
+                m_ixex_theme_combo->GetDropDown().SetUseContentWidth(true);
+                std::string cur = "standard";
+                if (auto* o = m_config->option<ConfigOptionString>("ixex_viz_theme")) cur = o->value;
+                for (int i = 0; i < 4; ++i)
+                    if (cur == theme_vals[i]) { m_ixex_theme_combo->SetSelection(i); break; }
+                m_ixex_theme_combo->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent&) {
+                    int sel = m_ixex_theme_combo->GetSelection();
+                    std::string val = (sel >= 0 && sel < 4) ? theme_vals[sel] : "standard";
+                    m_config->set_key_value("ixex_viz_theme", new ConfigOptionString(val));
+                    on_value_change("ixex_viz_theme", val);
+                });
+                auto* s = new wxBoxSizer(wxHORIZONTAL);
+                s->Add(m_ixex_theme_combo, 0, wxALIGN_CENTER_VERTICAL);
+                return s;
+            };
+            optgroup->append_line(line);
+        }
+
+        {
+            // Parallel modes panel: visual toggle-grid list with + button
+            auto modes_og = page->new_optgroup(L("Parallel Modes"), L"param_advanced");
+            auto line = Line{ L("Modes"), L("") };
+            line.full_width = 1;
+            line.widget = [this](wxWindow* parent) -> wxSizer* {
+                int n_cols = m_config->opt_int("ixex_tools_per_gantry");
+                int n_rows = m_config->opt_int("ixex_gantry_count");
+                std::string layout_str = "front-left";
+                if (auto* o = m_config->option<ConfigOptionString>("ixex_tool_layout")) layout_str = o->value;
+                int layout = IXexModesCtrl::parse_layout(layout_str);
+                m_ixex_modes_ctrl = new IXexModesCtrl(parent, n_cols, n_rows, layout);
+                m_ixex_modes_ctrl->load_from_config(*m_config);
+                m_ixex_modes_ctrl->on_change = [this]() {
+                    auto [names, tools, gcodes] = m_ixex_modes_ctrl->get_mode_data();
+                    m_config->set_key_value("ixex_mode_names",        new ConfigOptionStrings(names));
+                    m_config->set_key_value("ixex_mode_active_tools", new ConfigOptionStrings(tools));
+                    m_config->set_key_value("ixex_mode_gcodes",       new ConfigOptionStrings(gcodes));
+                    update_dirty();
+                    on_value_change("ixex_mode_names", std::string(""));
+                    // Refresh the process tab's mode dropdown immediately
+                    if (auto* print_tab = dynamic_cast<TabPrint*>(wxGetApp().get_tab(Preset::TYPE_PRINT)))
+                        print_tab->refresh_ixex_mode_combo();
+                };
+                auto* sizer = new wxBoxSizer(wxHORIZONTAL);
+                sizer->Add(m_ixex_modes_ctrl, 1, wxEXPAND);
+                return sizer;
+            };
+            modes_og->append_line(line);
+        }
 
     page = add_options_page(L("Notes"), "custom-gcode_note"); // ORCA: icon only visible on placeholders
         optgroup = page->new_optgroup(L("Notes"), "note", 0);
@@ -5168,6 +5648,33 @@ void TabPrinter::reload_config()
     // so update it implicitly
     if (m_active_page && m_active_page->title() == "Multimaterial")
         m_active_page->set_value("extruders_count", int(m_extruders_count));
+
+    if (m_config) {
+        // Sync layout combo
+        if (m_ixex_layout_combo) {
+            static const char* layout_vals[] = { "front-left", "front-right", "rear-left", "rear-right" };
+            std::string cur = "front-left";
+            if (auto* o = m_config->option<ConfigOptionString>("ixex_tool_layout")) cur = o->value;
+            for (int i = 0; i < 4; ++i)
+                if (cur == layout_vals[i]) { m_ixex_layout_combo->SetSelection(i); break; }
+        }
+        // Sync theme combo
+        if (m_ixex_theme_combo) {
+            static const char* theme_vals[] = { "standard", "deuteranopia", "tritanopia", "high_contrast" };
+            std::string cur = "standard";
+            if (auto* o = m_config->option<ConfigOptionString>("ixex_viz_theme")) cur = o->value;
+            for (int i = 0; i < 4; ++i)
+                if (cur == theme_vals[i]) { m_ixex_theme_combo->SetSelection(i); break; }
+        }
+        if (m_ixex_modes_ctrl) {
+            int n_cols = m_config->opt_int("ixex_tools_per_gantry");
+            int n_rows = m_config->opt_int("ixex_gantry_count");
+            std::string layout_str = "front-left";
+            if (auto* o = m_config->option<ConfigOptionString>("ixex_tool_layout")) layout_str = o->value;
+            m_ixex_modes_ctrl->set_grid_size(n_cols, n_rows, IXexModesCtrl::parse_layout(layout_str));
+            m_ixex_modes_ctrl->load_from_config(*m_config);
+        }
+    }
 }
 
 void TabPrinter::activate_selected_page(std::function<void()> throw_if_canceled)
@@ -5184,6 +5691,9 @@ void TabPrinter::clear_pages()
 {
     Tab::clear_pages();
     m_reset_to_filament_color = nullptr;
+    m_ixex_modes_ctrl   = nullptr;
+    m_ixex_layout_combo = nullptr;
+    m_ixex_theme_combo  = nullptr;
 }
 
 void TabPrinter::toggle_options()
@@ -5391,6 +5901,15 @@ void TabPrinter::update_fff()
     if (m_use_silent_mode != m_config->opt_bool("silent_mode"))	{
         m_rebuild_kinematics_page = true;
         m_use_silent_mode = m_config->opt_bool("silent_mode");
+    }
+
+    // Sync iXex tool grid whenever carriage configuration changes.
+    // set_grid_size() is a no-op when dimensions and layout are unchanged.
+    if (m_ixex_modes_ctrl) {
+        int n_cols = m_config->opt_int("ixex_tools_per_gantry");
+        int n_rows = m_config->opt_int("ixex_gantry_count");
+        std::string layout_str = m_config->opt_string("ixex_tool_layout");
+        m_ixex_modes_ctrl->set_grid_size(n_cols, n_rows, IXexModesCtrl::parse_layout(layout_str));
     }
 
     toggle_options();

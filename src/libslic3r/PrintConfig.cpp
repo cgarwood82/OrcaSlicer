@@ -193,6 +193,7 @@ static t_config_enum_values s_keys_map_WipeTowerType {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(WipeTowerType)
 
+
 static t_config_enum_values s_keys_map_FuzzySkinMode {
     { "displacement",   int(FuzzySkinMode::Displacement) },
     { "extrusion",      int(FuzzySkinMode::Extrusion) },
@@ -5481,6 +5482,108 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("Use single nozzle to print multi filament.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(true));
+
+    // iXex (independent X extruder) — parallel printing support for IDEX/IQEX printers
+    def = this->add("is_ixex", coBool);
+    def->label = L("iXex Printer");
+    def->tooltip = L("Enable iXex (independent X extruder) support for IDEX/IQEX printers with multiple independent carriages.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("ixex_gantry_count", coInt);
+    def->label = L("Gantry Count");
+    def->tooltip = L("Number of independent Y-axis gantries. 1 for IDEX/single-rail IQEX. 2 for dual-gantry systems (divides bed into rows).");
+    def->min = 1;
+    def->max = 2;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(1));
+
+    def = this->add("ixex_tools_per_gantry", coInt);
+    def->label = L("Tools per Gantry");
+    def->tooltip = L("Number of independent toolheads per gantry along X. 2 for IDEX-style.");
+    def->min = 1;
+    def->max = 2;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(2));
+
+    def = this->add("ixex_primary_col", coInt);
+    def->label = L("Primary Tool Column");
+    def->tooltip = L("X index (0-based) of the primary toolhead. 0 = leftmost column. Determines which zone is the active print area.");
+    def->min = 0;
+    def->max = 3;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(0));
+
+    def = this->add("ixex_primary_row", coInt);
+    def->label = L("Primary Tool Row");
+    def->tooltip = L("Y index (0-based) of the primary toolhead's gantry. 0 = front gantry. Determines which zone is the active print area.");
+    def->min = 0;
+    def->max = 3;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(0));
+
+    def = this->add("ixex_tool_layout", coString);
+    def->label = L("Tool 0 Corner");
+    def->tooltip = L("Physical corner of the bed where tool T0 (index 0) is located. "
+                     "Determines how tool indices map to bed zones. "
+                     "front = lower Y (near the operator), rear = higher Y (back of machine).");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionString("front-left"));
+
+    def = this->add("ixex_carriage_width_x", coFloat);
+    def->label = L("Carriage Width X");
+    def->tooltip = L("Toolhead footprint in the X direction (mm). Used to calculate usable bed zones and detect carriage collisions.");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(30.0));
+
+    def = this->add("ixex_carriage_width_y", coFloat);
+    def->label = L("Carriage Width Y");
+    def->tooltip = L("Toolhead footprint in the Y direction (mm). Used for collision detection.");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(30.0));
+
+    def = this->add("ixex_carriage_margin", coFloat);
+    def->label = L("Safety Margin");
+    def->tooltip = L("Non-blocking advisory clearance strip (mm) drawn inside the primary zone at each carriage boundary. Parts placed within this strip will still slice; it is a visual reminder to leave extra clearance near the zone edge.");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->max = 200;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.0));
+
+    def = this->add("ixex_viz_theme", coString);
+    def->label = L("Visualization Theme");
+    def->tooltip = L("Color theme for iXex bed zone visualization. Choose a colorblind-friendly theme if needed.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionString("standard"));
+
+    def = this->add("ixex_parallel_mode", coString);
+    def->label = L("iXex Print Mode");
+    def->tooltip = L("Name of the active iXex parallel print mode, or \"primary\" for single-carriage printing. Requires iXex Printer enabled in the Printer preset (Printer \u2192 iXex tab).");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionString("primary"));
+
+    def = this->add("ixex_mode_names", coStrings);
+    def->label = L("iXex Mode Names");
+    def->tooltip = L("Display names for each user-defined iXex parallel print mode.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionStrings());
+
+    def = this->add("ixex_mode_active_tools", coStrings);
+    def->label = L("iXex Mode Active Tools");
+    def->tooltip = L("Tool role assignments for each mode. Format: \"idx:P,idx:C,idx:M\" where P=Primary, C=Copy, M=Mirror (e.g. \"0:P,1:C,2:M,3:M\"). Managed by the iXex Modes editor in the Printer preset.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionStrings());
+
+    def = this->add("ixex_mode_gcodes", coStrings);
+    def->label = L("iXex Mode G-codes");
+    def->tooltip = L("G-code or macro call to inject at print start for each mode.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionStrings());
 
     def = this->add("manual_filament_change", coBool);
     def->label = L("Manual Filament Change");
