@@ -2903,6 +2903,7 @@ void TabPrint::clear_pages()
 
     m_recommended_thin_wall_thickness_description_line = nullptr;
     m_top_bottom_shell_thickness_explanation = nullptr;
+    m_ixex_mode_combo = nullptr;
 }
 
 //BBS: GUI refactor
