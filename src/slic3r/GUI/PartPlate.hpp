@@ -137,8 +137,7 @@ private:
     GLModel m_gridlines_bolder;
     std::vector<GLModel> m_ixex_copy_zones;        // blue tint (Wong #56B4E9)
     std::vector<GLModel> m_ixex_mirror_zones;      // orange tint (Wong #E69F00)
-    GLModel              m_ixex_zone_borders;      // white outlines around active secondary zones
-    std::vector<BoundingBoxf3> m_ixex_secondary_zone_boxes; // secondary (copy/mirror) zone rects — objects blocked here
+std::vector<BoundingBoxf3> m_ixex_secondary_zone_boxes; // secondary (copy/mirror) zone rects — objects blocked here
     std::vector<BoundingBoxf3> m_ixex_collision_zones;      // carriage danger strips inside primary zone (mm)
     std::vector<GLModel>       m_ixex_collision_overlay;    // red-orange rendered fill for danger strips
     std::vector<GLModel>       m_ixex_margin_overlay;       // amber advisory bands just inside collision strips

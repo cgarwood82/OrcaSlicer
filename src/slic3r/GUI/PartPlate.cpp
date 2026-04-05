@@ -460,7 +460,6 @@ void PartPlate::calc_ixex_zones()
 {
     m_ixex_copy_zones.clear();
     m_ixex_mirror_zones.clear();
-    m_ixex_zone_borders.reset();
     // Clear blocking vectors at the top so early returns don't leave stale data.
     m_ixex_secondary_zone_boxes.clear();
     m_ixex_collision_zones.clear();
@@ -638,26 +637,6 @@ void PartPlate::calc_ixex_zones()
     push_expanded_fills(m_ixex_copy_zones,   copy_cells);
     push_expanded_fills(m_ixex_mirror_zones, mirror_cells);
 
-    // White borders: one outline per expanded box of each active secondary type.
-    auto build_rect_lines = [](const std::vector<BoxRect>& boxes) -> Lines {
-        Lines lines;
-        for (const auto& b : boxes) {
-            lines.emplace_back(Point(scale_(b.x0), scale_(b.y0)), Point(scale_(b.x1), scale_(b.y0)));
-            lines.emplace_back(Point(scale_(b.x1), scale_(b.y0)), Point(scale_(b.x1), scale_(b.y1)));
-            lines.emplace_back(Point(scale_(b.x1), scale_(b.y1)), Point(scale_(b.x0), scale_(b.y1)));
-            lines.emplace_back(Point(scale_(b.x0), scale_(b.y1)), Point(scale_(b.x0), scale_(b.y0)));
-        }
-        return lines;
-    };
-
-    // Combine copy+mirror for borders (each expands independently then we collect all lines)
-    Lines all_border_lines = build_rect_lines(make_boxes(copy_cells));
-    auto mirror_border_lines = build_rect_lines(make_boxes(mirror_cells));
-    all_border_lines.insert(all_border_lines.end(), mirror_border_lines.begin(), mirror_border_lines.end());
-
-    if (!all_border_lines.empty())
-        if (!init_model_from_lines(m_ixex_zone_borders, all_border_lines, GROUND_Z_GRIDLINE))
-            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": unable to create iXex zone border lines\n";
 
     // --- Secondary zone blocking ---
     // Collect the expanded bounding boxes for all secondary (copy+mirror) zones.
@@ -857,7 +836,6 @@ void PartPlate::render_ixex_zones(bool force_default_color)
     struct IXexTheme {
         ColorRGBA copy;     // secondary copy zone fill
         ColorRGBA mirror;   // secondary mirror zone fill
-        ColorRGBA border;   // zone outline
         ColorRGBA danger;   // blocking collision strip
         ColorRGBA margin;   // advisory safety margin
     };
@@ -866,7 +844,6 @@ void PartPlate::render_ixex_zones(bool force_default_color)
     static const IXexTheme k_standard = {
         { 0.337f, 0.706f, 0.914f, 0.45f },   // copy   — sky blue  #56B4E9
         { 0.902f, 0.624f, 0.000f, 0.45f },   // mirror — orange    #E69F00
-        { 1.000f, 1.000f, 1.000f, 0.90f },   // border — white
         { 0.850f, 0.100f, 0.100f, 0.55f },   // danger — red
         { 0.300f, 0.900f, 0.200f, 0.40f },   // margin — lime green
     };
@@ -875,7 +852,6 @@ void PartPlate::render_ixex_zones(bool force_default_color)
     static const IXexTheme k_deuteranopia = {
         { 0.000f, 0.447f, 0.698f, 0.50f },   // copy   — blue       #0072B2
         { 0.941f, 0.894f, 0.259f, 0.50f },   // mirror — yellow     #F0E442
-        { 1.000f, 1.000f, 1.000f, 0.90f },   // border — white
         { 0.200f, 0.100f, 0.800f, 0.65f },   // danger — blue-violet (red not visible)
         { 0.800f, 0.475f, 0.655f, 0.45f },   // margin — reddish purple #CC79A7
     };
@@ -884,7 +860,6 @@ void PartPlate::render_ixex_zones(bool force_default_color)
     static const IXexTheme k_tritanopia = {
         { 0.835f, 0.369f, 0.000f, 0.50f },   // copy   — vermilion  #D55E00
         { 0.800f, 0.475f, 0.655f, 0.50f },   // mirror — reddish purple #CC79A7
-        { 1.000f, 1.000f, 1.000f, 0.90f },   // border — white
         { 0.850f, 0.100f, 0.100f, 0.55f },   // danger — red (visible to tritanopes)
         { 0.000f, 0.700f, 0.600f, 0.45f },   // margin — teal
     };
@@ -892,7 +867,6 @@ void PartPlate::render_ixex_zones(bool force_default_color)
     static const IXexTheme k_high_contrast = {
         { 0.000f, 0.600f, 1.000f, 0.65f },   // copy   — vivid blue
         { 1.000f, 0.600f, 0.000f, 0.65f },   // mirror — vivid orange
-        { 1.000f, 1.000f, 0.000f, 1.00f },   // border — bright yellow
         { 1.000f, 0.000f, 0.000f, 0.75f },   // danger — full red
         { 0.000f, 1.000f, 0.200f, 0.60f },   // margin — bright green
     };
@@ -920,12 +894,6 @@ void PartPlate::render_ixex_zones(bool force_default_color)
 
     glsafe(::glDepthMask(GL_TRUE));
 
-    if (m_ixex_zone_borders.is_initialized()) {
-        m_ixex_zone_borders.set_color(theme->border);
-        glsafe(::glLineWidth(2.0f));
-        m_ixex_zone_borders.render();
-        glsafe(::glLineWidth(1.0f));
-    }
 
     if (!m_ixex_collision_overlay.empty()) {
         glsafe(::glDepthMask(GL_FALSE));
