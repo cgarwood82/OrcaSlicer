@@ -540,6 +540,19 @@ void ArrangeJob::process(Ctl &ctl)
 
     Points      bedpts = get_shrink_bedpts(m_plater->config(),params);
 
+    // When an iXex parallel mode is active, constrain auto-arrange to the primary zone only.
+    if (PartPlate* curr_plate = partplate_list.get_curr_plate()) {
+        if (auto pz = curr_plate->ixex_primary_zone()) {
+            BoundingBox scaled_pz = scaled(*pz);
+            bedpts = {
+                { scaled_pz.min.x(), scaled_pz.min.y() },
+                { scaled_pz.max.x(), scaled_pz.min.y() },
+                { scaled_pz.max.x(), scaled_pz.max.y() },
+                { scaled_pz.min.x(), scaled_pz.max.y() },
+            };
+        }
+    }
+
     bool   enable_wrapping = global_config.option<ConfigOptionBool>("enable_wrapping_detection")->value;
     partplate_list.preprocess_exclude_areas(params.excluded_regions, enable_wrapping, 1, scale_(1));
 

@@ -465,6 +465,7 @@ void PartPlate::calc_ixex_zones()
     m_ixex_collision_zones.clear();
     m_ixex_collision_overlay.clear();
     m_ixex_margin_overlay.clear();
+    m_ixex_primary_zone_box = std::nullopt;
 
     if (!wxGetApp().preset_bundle)
         return;
@@ -689,6 +690,7 @@ void PartPlate::calc_ixex_zones()
     double pz_x1 = has_col_sep ? x_min + (pri_col + 1) * zone_w : x_max;
     double pz_y0 = has_row_sep ? y_min + pri_row        * zone_h : y_min;
     double pz_y1 = has_row_sep ? y_min + (pri_row + 1)  * zone_h : y_max;
+    m_ixex_primary_zone_box = BoundingBoxf(Vec2d(pz_x0, pz_y0), Vec2d(pz_x1, pz_y1));
 
     // Helper: build a BoundingBoxf3 strip, clip to bed, add to members
     auto add_strip = [&](double sx0, double sx1, double sy0, double sy1) {
