@@ -449,6 +449,9 @@ public:
     // Returns the primary-zone bounding box in mm when an iXex parallel mode is active.
     // Empty (nullopt) when iXex is off or the mode is "primary" (full-bed).
     std::optional<BoundingBoxf> ixex_primary_zone() { ensure_ixex_zones(); return m_ixex_primary_zone_box; }
+    // Returns carriage collision strips (mm) for the current iXex mode.
+    // Always call ixex_primary_zone() first to ensure the cache is warm.
+    const std::vector<BoundingBoxf3>& ixex_collision_zones() const { return m_ixex_collision_zones; }
     void update_slice_ready_status(bool ready_slice)
     {
         m_ready_for_slice = ready_slice;

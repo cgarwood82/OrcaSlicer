@@ -540,7 +540,8 @@ void ArrangeJob::process(Ctl &ctl)
 
     Points      bedpts = get_shrink_bedpts(m_plater->config(),params);
 
-    // When an iXex parallel mode is active, constrain auto-arrange to the primary zone only.
+    // When an iXex parallel mode is active, constrain auto-arrange to the primary zone only
+    // and treat carriage collision strips as hard excluded regions.
     if (PartPlate* curr_plate = partplate_list.get_curr_plate()) {
         if (auto pz = curr_plate->ixex_primary_zone()) {
             BoundingBox scaled_pz = scaled(*pz);
@@ -550,6 +551,23 @@ void ArrangeJob::process(Ctl &ctl)
                 { scaled_pz.max.x(), scaled_pz.max.y() },
                 { scaled_pz.min.x(), scaled_pz.max.y() },
             };
+            for (const BoundingBoxf3& cz : curr_plate->ixex_collision_zones()) {
+                Polygon poly({
+                    { scaled(cz.min.x()), scaled(cz.min.y()) },
+                    { scaled(cz.max.x()), scaled(cz.min.y()) },
+                    { scaled(cz.max.x()), scaled(cz.max.y()) },
+                    { scaled(cz.min.x()), scaled(cz.max.y()) },
+                });
+                arrangement::ArrangePolygon ap;
+                ap.poly.contour  = poly;
+                ap.translation   = Vec2crd(0, 0);
+                ap.rotation      = 0.0;
+                ap.is_virt_object = true;
+                ap.bed_idx       = current_plate_index;
+                ap.height        = 1;
+                ap.name          = "IXexCollisionZone";
+                params.excluded_regions.emplace_back(std::move(ap));
+            }
         }
     }
 
