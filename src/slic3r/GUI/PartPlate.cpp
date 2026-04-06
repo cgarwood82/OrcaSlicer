@@ -465,6 +465,7 @@ void PartPlate::calc_ixex_zones()
     m_ixex_collision_zones.clear();
     m_ixex_collision_overlay.clear();
     m_ixex_margin_overlay.clear();
+    m_ixex_primary_zone_box = std::nullopt;
 
     if (!wxGetApp().preset_bundle)
         return;
@@ -652,18 +653,18 @@ void PartPlate::calc_ixex_zones()
     // Only add strips at boundaries of the PRIMARY zone — objects are only placed in the
     // primary zone, so secondary-to-secondary boundaries have no relevance.
     //
-    // Strip width is carriage/2 on the primary side only:
-    //   right X boundary: [bnd_x - carriage_w/2, bnd_x]
-    //   left  X boundary: [bnd_x, bnd_x + carriage_w/2]
-    //   top   Y boundary: [bnd_y - carriage_h/2, bnd_y]
-    //   bottom Y boundary:[bnd_y, bnd_y + carriage_h/2]
+    // Strip width is the literal nozzle clearance value on the primary side only:
+    //   right X boundary: [bnd_x - nozzle_clearance_x, bnd_x]
+    //   left  X boundary: [bnd_x, bnd_x + nozzle_clearance_x]
+    //   top   Y boundary: [bnd_y - nozzle_clearance_y, bnd_y]
+    //   bottom Y boundary:[bnd_y, bnd_y + nozzle_clearance_y]
     //
     // Strip length matches the primary zone extent (same expansion logic as make_boxes):
     //   !has_row_sep → full bed height;  has_row_sep → primary row only
     //   !has_col_sep → full bed width;   has_col_sep → primary column only
 
-    auto* cw_opt  = printer_cfg.option<ConfigOptionFloat>("ixex_carriage_width_x");
-    auto* ch_opt  = printer_cfg.option<ConfigOptionFloat>("ixex_carriage_width_y");
+    auto* cw_opt  = printer_cfg.option<ConfigOptionFloat>("ixex_nozzle_clearance_x");
+    auto* ch_opt  = printer_cfg.option<ConfigOptionFloat>("ixex_nozzle_clearance_y");
     auto* mgn_opt = printer_cfg.option<ConfigOptionFloat>("ixex_carriage_margin");
     double carriage_w = cw_opt  ? cw_opt->value  : 0.0;
     double carriage_h = ch_opt  ? ch_opt->value  : 0.0;
@@ -689,6 +690,7 @@ void PartPlate::calc_ixex_zones()
     double pz_x1 = has_col_sep ? x_min + (pri_col + 1) * zone_w : x_max;
     double pz_y0 = has_row_sep ? y_min + pri_row        * zone_h : y_min;
     double pz_y1 = has_row_sep ? y_min + (pri_row + 1)  * zone_h : y_max;
+    m_ixex_primary_zone_box = BoundingBoxf(Vec2d(pz_x0, pz_y0), Vec2d(pz_x1, pz_y1));
 
     // Helper: build a BoundingBoxf3 strip, clip to bed, add to members
     auto add_strip = [&](double sx0, double sx1, double sy0, double sy1) {
@@ -727,36 +729,36 @@ void PartPlate::calc_ixex_zones()
         if (r == pri_row - 1 && c == pri_col) has_bottom_sec = true;
     }
 
-    // X-axis boundaries (vertical strips, width = carriage_w/2 on primary side)
+    // X-axis boundaries (vertical strips, width = nozzle_clearance_x on primary side)
     if (carriage_w > 0.0) {
         if (has_right_sec) {
             double bnd_x = x_min + (pri_col + 1) * zone_w;
-            double strip_inner = bnd_x - carriage_w * 0.5;
+            double strip_inner = bnd_x - carriage_w;
             add_strip(strip_inner, bnd_x, pz_y0, pz_y1);
             if (margin > 0.0)
                 add_margin_fill(strip_inner - margin, strip_inner, pz_y0, pz_y1);
         }
         if (has_left_sec) {
             double bnd_x = x_min + pri_col * zone_w;
-            double strip_inner = bnd_x + carriage_w * 0.5;
+            double strip_inner = bnd_x + carriage_w;
             add_strip(bnd_x, strip_inner, pz_y0, pz_y1);
             if (margin > 0.0)
                 add_margin_fill(strip_inner, strip_inner + margin, pz_y0, pz_y1);
         }
     }
 
-    // Y-axis boundaries (horizontal strips, width = carriage_h/2 on primary side)
+    // Y-axis boundaries (horizontal strips, width = nozzle_clearance_y on primary side)
     if (carriage_h > 0.0) {
         if (has_top_sec) {
             double bnd_y = y_min + (pri_row + 1) * zone_h;
-            double strip_inner = bnd_y - carriage_h * 0.5;
+            double strip_inner = bnd_y - carriage_h;
             add_strip(pz_x0, pz_x1, strip_inner, bnd_y);
             if (margin > 0.0)
                 add_margin_fill(pz_x0, pz_x1, strip_inner - margin, strip_inner);
         }
         if (has_bottom_sec) {
             double bnd_y = y_min + pri_row * zone_h;
-            double strip_inner = bnd_y + carriage_h * 0.5;
+            double strip_inner = bnd_y + carriage_h;
             add_strip(pz_x0, pz_x1, bnd_y, strip_inner);
             if (margin > 0.0)
                 add_margin_fill(pz_x0, pz_x1, strip_inner, strip_inner + margin);
@@ -777,8 +779,8 @@ static std::string build_ixex_cache_key()
     auto* mode_opt  = process_cfg.option<ConfigOptionString>("ixex_parallel_mode");
     auto* n_col_opt = printer_cfg.option<ConfigOptionInt>("ixex_tools_per_gantry");
     auto* n_row_opt = printer_cfg.option<ConfigOptionInt>("ixex_gantry_count");
-    auto* cw_opt    = printer_cfg.option<ConfigOptionFloat>("ixex_carriage_width_x");
-    auto* ch_opt    = printer_cfg.option<ConfigOptionFloat>("ixex_carriage_width_y");
+    auto* cw_opt    = printer_cfg.option<ConfigOptionFloat>("ixex_nozzle_clearance_x");
+    auto* ch_opt    = printer_cfg.option<ConfigOptionFloat>("ixex_nozzle_clearance_y");
     auto* mgn_opt   = printer_cfg.option<ConfigOptionFloat>("ixex_carriage_margin");
     return (mode_opt ? mode_opt->value : "primary")
          + "|" + std::to_string(n_col_opt ? n_col_opt->value : 2)

@@ -4,6 +4,7 @@
 #include <vector>
 #include <set>
 #include <array>
+#include <optional>
 #include <thread>
 #include <mutex>
 
@@ -137,10 +138,11 @@ private:
     GLModel m_gridlines_bolder;
     std::vector<GLModel> m_ixex_copy_zones;        // blue tint (Wong #56B4E9)
     std::vector<GLModel> m_ixex_mirror_zones;      // orange tint (Wong #E69F00)
-std::vector<BoundingBoxf3> m_ixex_secondary_zone_boxes; // secondary (copy/mirror) zone rects — objects blocked here
+    std::vector<BoundingBoxf3> m_ixex_secondary_zone_boxes; // secondary (copy/mirror) zone rects — objects blocked here
     std::vector<BoundingBoxf3> m_ixex_collision_zones;      // carriage danger strips inside primary zone (mm)
     std::vector<GLModel>       m_ixex_collision_overlay;    // red-orange rendered fill for danger strips
     std::vector<GLModel>       m_ixex_margin_overlay;       // amber advisory bands just inside collision strips
+    std::optional<BoundingBoxf> m_ixex_primary_zone_box;   // primary zone extents in mm; empty when iXex is off/primary-only
     std::string m_ixex_zones_mode_cache{ "\x01" }; // cached mode+topology key; sentinel = unbuilt
     GLModel m_height_limit_common;
     GLModel m_height_limit_bottom;
@@ -444,6 +446,12 @@ public:
     }
     // Returns true if any instance on this plate overlaps an iXex secondary or collision zone.
     bool has_ixex_placement_violations();
+    // Returns the primary-zone bounding box in mm when an iXex parallel mode is active.
+    // Empty (nullopt) when iXex is off or the mode is "primary" (full-bed).
+    std::optional<BoundingBoxf> ixex_primary_zone() { ensure_ixex_zones(); return m_ixex_primary_zone_box; }
+    // Returns carriage collision strips (mm) for the current iXex mode.
+    // Always call ixex_primary_zone() first to ensure the cache is warm.
+    const std::vector<BoundingBoxf3>& ixex_collision_zones() const { return m_ixex_collision_zones; }
     void update_slice_ready_status(bool ready_slice)
     {
         m_ready_for_slice = ready_slice;

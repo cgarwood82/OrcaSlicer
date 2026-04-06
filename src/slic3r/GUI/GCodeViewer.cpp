@@ -1521,7 +1521,7 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
         { 0.835f, 0.369f, 0.000f, 0.65f },   // secondary 2  — vermilion    (#D55E00)
         { 0.800f, 0.475f, 0.655f, 0.65f },   // secondary 3  — reddish purple (#CC79A7)
     }};
-    struct CarriageDraw { Vec3f pos; ColorRGBA color; };
+    struct CarriageDraw { Vec3f pos; ColorRGBA color; float box_offset_x = 0.0f; float box_offset_y = 0.0f; };
     std::vector<CarriageDraw> carriage_box_draws;
     float ixex_box_wx = 0.0f, ixex_box_wy = 0.0f;
     {
@@ -1545,8 +1545,8 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
                     auto* active_tools_opt = printer_cfg.opt<ConfigOptionStrings>("ixex_mode_active_tools");
 
                     auto* tpg_opt = printer_cfg.opt<ConfigOptionInt>("ixex_tools_per_gantry");
-                    auto* wx_opt  = printer_cfg.opt<ConfigOptionFloat>("ixex_carriage_width_x");
-                    auto* wy_opt  = printer_cfg.opt<ConfigOptionFloat>("ixex_carriage_width_y");
+                    auto* wx_opt  = printer_cfg.opt<ConfigOptionFloat>("ixex_nozzle_clearance_x");
+                    auto* wy_opt  = printer_cfg.opt<ConfigOptionFloat>("ixex_nozzle_clearance_y");
                     int tools_per_gantry = tpg_opt ? std::max(1, tpg_opt->value) : 1;
                     ixex_box_wx = wx_opt ? (float)wx_opt->value : 30.0f;
                     ixex_box_wy = wy_opt ? (float)wy_opt->value : 30.0f;
@@ -1665,8 +1665,19 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
                             }
                         }
 
-                        // Primary carriage box
-                        carriage_box_draws.push_back({ prim_pos, s_carriage_colors[0] });
+                        // Primary carriage box: nozzle sits at the collision-side edge.
+                        // Default to centered; override once we know which side the secondaries are on.
+                        float pri_box_offset_x = (pri_phys_col == 0) ? 0.0f : -ixex_box_wx; // nozzle at inner edge (facing center of bed)
+                        float pri_box_offset_y = -ixex_box_wy;        // nozzle at high-Y edge by default (gantry always behind nozzle); override if secondary is behind
+                        for (int i = 0; i < sec_count; ++i) {
+                            int sc = phys_col_of(sec_tool_ids[i]);
+                            int sr = phys_row_of(sec_tool_ids[i]);
+                            if      (sc > pri_phys_col) { pri_box_offset_x = 0.0f;          }
+                            else if (sc < pri_phys_col) { pri_box_offset_x = -ixex_box_wx;  }
+                            if      (sr > pri_phys_row) { pri_box_offset_y = 0.0f;          }
+                            else if (sr < pri_phys_row) { pri_box_offset_y = -ixex_box_wy;  }
+                        }
+                        carriage_box_draws.push_back({ prim_pos, s_carriage_colors[0], pri_box_offset_x, pri_box_offset_y });
 
                         const float pri_zone_x = bed_x_min + (float)pri_phys_col * strip_width;
                         const float pri_zone_y = bed_y_min + (float)pri_phys_row * row_strip_height;
@@ -1704,8 +1715,26 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
                             Vec3f sec_pos{ sec_x, sec_y, prim_pos.z() };
                             m_sequential_view.m_ixex_secondary_markers[i].set_world_position(sec_pos);
                             m_sequential_view.m_ixex_secondary_markers[i].set_z_offset(m_z_offset + 0.5f);
+                            // X: copy tools move in sync with primary so they share the same
+                            // X-facing orientation. Mirror tools approach from the opposite side
+                            // so the nozzle sits at the collision-side edge.
+                            float sec_box_offset_x;
+                            if (sec_state == 2) {
+                                sec_box_offset_x = pri_box_offset_x;
+                            } else {
+                                if      (sec_phys_col > pri_phys_col) sec_box_offset_x = -ixex_box_wx;
+                                else if (sec_phys_col < pri_phys_col) sec_box_offset_x = 0.0f;
+                                else                                  sec_box_offset_x = pri_box_offset_x;
+                            }
+                            // Y: always row-based — gantry is always behind nozzle regardless of
+                            // copy/mirror (a back-row copy still has its gantry at the back).
+                            float sec_box_offset_y;
+                            if      (sec_phys_row > pri_phys_row) sec_box_offset_y = -ixex_box_wy;
+                            else if (sec_phys_row < pri_phys_row) sec_box_offset_y = 0.0f;
+                            else                                  sec_box_offset_y = -ixex_box_wy;
                             carriage_box_draws.push_back({
-                                sec_pos, s_carriage_colors[(i + 1) % s_carriage_colors.size()] });
+                                sec_pos, s_carriage_colors[(i + 1) % s_carriage_colors.size()],
+                                sec_box_offset_x, sec_box_offset_y });
                         }
                     }
                 }
@@ -1719,17 +1748,19 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
     m_sequential_view.render(!m_no_render_path, legend_height, &m_viewer, m_viewer.get_current_vertex().gcode_id, canvas_width, canvas_height - bottom_margin * m_scale, right_margin * m_scale, m_viewer.get_view_type());
 
     // iXex: render toolhead footprint boxes for each active carriage.
-    // Each box is ixex_carriage_width_x × ixex_carriage_width_y, sitting above the nozzle tip.
+    // Each box is ixex_nozzle_clearance_x × ixex_nozzle_clearance_y, sitting above the nozzle tip.
     if (!carriage_box_draws.empty() && ixex_box_wx > 0.0f && ixex_box_wy > 0.0f) {
-        // Rebuild box mesh if dimensions changed
-        const Vec2f new_dims{ ixex_box_wx, ixex_box_wy };
-        if (!m_ixex_toolhead_box.is_initialized() || new_dims != m_ixex_toolhead_box_dims) {
-            m_ixex_toolhead_box_dims = new_dims;
-            const float box_h = std::max(ixex_box_wx, ixex_box_wy); // height ~ largest horizontal dim
+        // Rebuild box mesh every frame — dimensions can change via config edit without a
+        // G-code reload, so dimension-based caching isn't safe.
+        // Mesh origin: nozzle at x=0, centered in Y, Z starts at nozzle tip level.
+        // Per-carriage box_offset_x shifts the mesh left or right so the nozzle lands
+        // at the correct (collision-side) edge.
+        {
+            const float box_h = std::max(ixex_box_wx, ixex_box_wy);
             indexed_triangle_set its = its_make_cube((double)ixex_box_wx, (double)ixex_box_wy, (double)box_h);
-            // Center in X and Y; Z starts at 0 (nozzle tip level)
-            for (auto& v : its.vertices)
-                v += Vec3f(-ixex_box_wx * 0.5f, -ixex_box_wy * 0.5f, 0.0f);
+            // No vertex pre-shifting — box_offset_x/y in the per-carriage transform
+            // positions the nozzle at the correct collision-side edge.
+            m_ixex_toolhead_box.reset();
             m_ixex_toolhead_box.init_from(its);
         }
 
@@ -1744,7 +1775,7 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
             const Transform3d& view_matrix = camera.get_view_matrix();
             for (const auto& draw : carriage_box_draws) {
                 const Transform3d model_matrix = Geometry::translation_transform(
-                    (draw.pos + Vec3f(0.0f, 0.0f, m_z_offset)).cast<double>());
+                    (draw.pos + Vec3f(draw.box_offset_x, draw.box_offset_y, m_z_offset)).cast<double>());
                 shader->set_uniform("view_model_matrix", view_matrix * model_matrix);
                 const Matrix3d view_normal_matrix =
                     view_matrix.matrix().block(0, 0, 3, 3) *

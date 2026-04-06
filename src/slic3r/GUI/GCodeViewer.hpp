@@ -207,7 +207,6 @@ private:
     std::string m_marker_filename;      // cached for lazy secondary marker init
     std::string m_ixex_last_mode;       // detect mode changes for secondary marker rebuild
     GLModel     m_ixex_toolhead_box;    // shared box mesh for all carriage footprint overlays
-    Vec2f       m_ixex_toolhead_box_dims{ 0.0f, 0.0f }; // (width_x, width_y) — rebuild when changed
 
     size_t m_extruders_count;
     std::vector<float> m_filament_diameters;

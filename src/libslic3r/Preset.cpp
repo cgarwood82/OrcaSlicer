@@ -1042,7 +1042,7 @@ static std::vector<std::string> s_Preset_printer_options {
     "bed_temperature_formula", "nozzle_flush_dataset",
     // iXex (independent X extruder) — printer capability and user-defined modes
     "is_ixex", "ixex_gantry_count", "ixex_tools_per_gantry", "ixex_tool_layout",
-    "ixex_carriage_width_x", "ixex_carriage_width_y", "ixex_carriage_margin", "ixex_viz_theme",
+    "ixex_nozzle_clearance_x", "ixex_nozzle_clearance_y", "ixex_carriage_margin", "ixex_viz_theme",
     "ixex_mode_names", "ixex_mode_active_tools", "ixex_mode_gcodes"
     };
 
