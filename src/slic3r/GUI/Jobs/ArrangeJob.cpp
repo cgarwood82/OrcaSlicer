@@ -566,7 +566,7 @@ void ArrangeJob::process(Ctl &ctl)
                 ap.bed_idx       = current_plate_index;
                 ap.height        = 1;
                 ap.name          = "IXexCollisionZone";
-                params.excluded_regions.emplace_back(std::move(ap));
+                m_unselected.emplace_back(std::move(ap));
             }
         }
     }
