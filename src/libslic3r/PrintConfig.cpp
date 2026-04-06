@@ -5530,17 +5530,17 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionString("front-left"));
 
-    def = this->add("ixex_carriage_width_x", coFloat);
-    def->label = L("Carriage Width X");
-    def->tooltip = L("Toolhead footprint in the X direction (mm). Used to calculate usable bed zones and detect carriage collisions.");
+    def = this->add("ixex_nozzle_clearance_x", coFloat);
+    def->label = L("Nozzle Clearance X");
+    def->tooltip = L("Distance (mm) from the nozzle to the collision-side carriage edge in X. Used to calculate the width of the collision exclusion strip at each X boundary.");
     def->sidetext = L("mm");
     def->min = 0;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(30.0));
 
-    def = this->add("ixex_carriage_width_y", coFloat);
-    def->label = L("Carriage Width Y");
-    def->tooltip = L("Toolhead footprint in the Y direction (mm). Used for collision detection.");
+    def = this->add("ixex_nozzle_clearance_y", coFloat);
+    def->label = L("Nozzle Clearance Y");
+    def->tooltip = L("Distance (mm) from the nozzle to the collision-side carriage edge in Y. Used to calculate the width of the collision exclusion strip at each Y boundary.");
     def->sidetext = L("mm");
     def->min = 0;
     def->mode = comAdvanced;

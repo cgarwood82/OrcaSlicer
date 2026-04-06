@@ -5002,8 +5002,8 @@ void TabPrinter::build_fff()
             };
             optgroup->append_line(line);
         }
-        optgroup->append_single_option_line("ixex_carriage_width_x");
-        optgroup->append_single_option_line("ixex_carriage_width_y");
+        optgroup->append_single_option_line("ixex_nozzle_clearance_x");
+        optgroup->append_single_option_line("ixex_nozzle_clearance_y");
         optgroup->append_single_option_line("ixex_carriage_margin");
 
         {
