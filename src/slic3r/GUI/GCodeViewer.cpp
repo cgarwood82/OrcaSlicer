@@ -1533,7 +1533,13 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
             if (is_ixex_opt && is_ixex_opt->value) {
                 const DynamicPrintConfig& process_cfg = preset_bundle->prints.get_edited_preset().config;
                 auto* mode_opt = process_cfg.opt<ConfigOptionString>("ixex_parallel_mode");
-                const std::string mode = mode_opt ? mode_opt->value : "primary";
+                std::string mode = mode_opt ? mode_opt->value : "primary";
+                // Per-plate mode overrides the process preset.
+                if (auto* plate = wxGetApp().plater()->get_partplate_list().get_curr_plate()) {
+                    std::string plate_mode = plate->get_ixex_mode();
+                    if (plate_mode != "primary")
+                        mode = plate_mode;
+                }
 
                 if (mode != m_ixex_last_mode) {
                     m_sequential_view.m_ixex_secondary_markers.clear();

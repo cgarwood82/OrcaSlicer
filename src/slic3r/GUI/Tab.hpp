@@ -464,12 +464,10 @@ public:
 	void		update() override;
 	void		clear_pages() override;
 	bool 		supports_printer_technology(const PrinterTechnology tech) const override { return tech == ptFFF; }
-    void        refresh_ixex_mode_combo();
 
 private:
 	ogStaticText*	m_recommended_thin_wall_thickness_description_line = nullptr;
 	ogStaticText*	m_top_bottom_shell_thickness_explanation = nullptr;
-    ComboBox*       m_ixex_mode_combo {nullptr};
 };
 
 class TabPrintModel : public TabPrint

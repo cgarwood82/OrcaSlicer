@@ -5506,22 +5506,6 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(2));
 
-    def = this->add("ixex_primary_col", coInt);
-    def->label = L("Primary Tool Column");
-    def->tooltip = L("X index (0-based) of the primary toolhead. 0 = leftmost column. Determines which zone is the active print area.");
-    def->min = 0;
-    def->max = 3;
-    def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionInt(0));
-
-    def = this->add("ixex_primary_row", coInt);
-    def->label = L("Primary Tool Row");
-    def->tooltip = L("Y index (0-based) of the primary toolhead's gantry. 0 = front gantry. Determines which zone is the active print area.");
-    def->min = 0;
-    def->max = 3;
-    def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionInt(0));
-
     def = this->add("ixex_tool_layout", coString);
     def->label = L("Tool 0 Corner");
     def->tooltip = L("Physical corner of the bed where tool T0 (index 0) is located. "

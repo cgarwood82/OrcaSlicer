@@ -1339,8 +1339,6 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool,                is_ixex))
     ((ConfigOptionInt,                 ixex_gantry_count))
     ((ConfigOptionInt,                 ixex_tools_per_gantry))
-    ((ConfigOptionInt,                 ixex_primary_col))
-    ((ConfigOptionInt,                 ixex_primary_row))
     ((ConfigOptionFloat,               ixex_nozzle_clearance_x))
     ((ConfigOptionFloat,               ixex_nozzle_clearance_y))
     ((ConfigOptionStrings,             ixex_mode_names))

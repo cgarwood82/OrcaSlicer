@@ -542,9 +542,16 @@ void ArrangeJob::process(Ctl &ctl)
 
     // When an iXex parallel mode is active, constrain auto-arrange to the primary zone only
     // and treat carriage collision strips as hard excluded regions.
+    // NOTE: m_ixex_primary_zone_box and ixex_collision_zones() are in global (world) coordinates
+    // because they are derived from m_shape which includes the plate origin offset.  The arranger
+    // always works in plate-local space (origin = 0,0), so we subtract the plate origin here.
     if (PartPlate* curr_plate = partplate_list.get_curr_plate()) {
         if (auto pz = curr_plate->ixex_primary_zone()) {
-            BoundingBox scaled_pz = scaled(*pz);
+            Vec3d plate_origin = curr_plate->get_origin();
+            double ox = plate_origin.x(), oy = plate_origin.y();
+            BoundingBoxf pz_local(Vec2d(pz->min.x() - ox, pz->min.y() - oy),
+                                  Vec2d(pz->max.x() - ox, pz->max.y() - oy));
+            BoundingBox scaled_pz = scaled(pz_local);
             bedpts = {
                 { scaled_pz.min.x(), scaled_pz.min.y() },
                 { scaled_pz.max.x(), scaled_pz.min.y() },
@@ -553,10 +560,10 @@ void ArrangeJob::process(Ctl &ctl)
             };
             for (const BoundingBoxf3& cz : curr_plate->ixex_collision_zones()) {
                 Polygon poly({
-                    { scaled(cz.min.x()), scaled(cz.min.y()) },
-                    { scaled(cz.max.x()), scaled(cz.min.y()) },
-                    { scaled(cz.max.x()), scaled(cz.max.y()) },
-                    { scaled(cz.min.x()), scaled(cz.max.y()) },
+                    { scaled(cz.min.x() - ox), scaled(cz.min.y() - oy) },
+                    { scaled(cz.max.x() - ox), scaled(cz.min.y() - oy) },
+                    { scaled(cz.max.x() - ox), scaled(cz.max.y() - oy) },
+                    { scaled(cz.min.x() - ox), scaled(cz.max.y() - oy) },
                 });
                 arrangement::ArrangePolygon ap;
                 ap.poly.contour  = poly;

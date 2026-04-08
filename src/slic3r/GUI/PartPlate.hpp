@@ -155,6 +155,7 @@ private:
     PickingModel m_plate_filament_map_icon;
     PickingModel m_plate_name_edit_icon;
     PickingModel m_move_front_icon;
+    PickingModel m_ixex_mode_icon;
     GLModel m_plate_idx_icon;
     GLTexture m_texture;
 
@@ -188,6 +189,7 @@ private:
     void calc_height_limit();
     void calc_ixex_zones();
     void ensure_ixex_zones();
+    std::string build_ixex_cache_key() const;
     void render_ixex_zones(bool force_default_color);
     void calc_vertex_for_number(int index, bool one_number, GLModel &buffer);
     void calc_vertex_for_plate_name_edit_icon(GLTexture *texture, int index, PickingModel &model);
@@ -220,7 +222,8 @@ private:
 public:
     static constexpr unsigned int PLATE_NAME_HOVER_ID = 6;
     static constexpr unsigned int PLATE_FILAMENT_MAP_ID = 8;
-    static constexpr unsigned int GRABBER_COUNT = 9;
+    static constexpr unsigned int PLATE_IXEX_MODE_ID = 9;
+    static constexpr unsigned int GRABBER_COUNT = 10;
 
     static ColorRGBA SELECT_COLOR;
     static ColorRGBA UNSELECT_COLOR;
@@ -279,6 +282,10 @@ public:
     bool has_spiral_mode_config() const;
     bool get_spiral_vase_mode() const;
     void set_spiral_vase_mode(bool spiral_mode, bool as_global);
+
+    std::string get_ixex_mode() const;
+    void        set_ixex_mode(const std::string& mode);
+    void        reset_ixex_mode();
 
     std::vector<Vec2d> get_plate_wrapping_detection_area() const;
 
@@ -627,6 +634,8 @@ class PartPlateList : public ObjectBase
     GLTexture m_plate_set_filament_map_hovered_texture;
     GLTexture m_plate_name_edit_texture;
     GLTexture m_plate_name_edit_hovered_texture;
+    GLTexture m_ixex_mode_texture;
+    GLTexture m_ixex_mode_hovered_texture;
     GLTexture m_idx_textures[MAX_PLATE_COUNT];
     // set render option
     bool render_bedtype_logo = true;
