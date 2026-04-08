@@ -365,6 +365,34 @@ std::vector<Vec2d> PartPlate::get_plate_wrapping_detection_area() const
     return std::vector<Vec2d>();
 }
 
+std::string PartPlate::get_ixex_mode() const
+{
+    if (m_config.has("ixex_parallel_mode")) {
+        auto* opt = m_config.option<ConfigOptionString>("ixex_parallel_mode");
+        if (opt && !opt->value.empty())
+            return opt->value;
+    }
+    return "primary";
+}
+
+void PartPlate::set_ixex_mode(const std::string& mode)
+{
+    if (mode.empty() || mode == "primary") {
+        m_config.erase("ixex_parallel_mode");
+    } else {
+        m_config.set_key_value("ixex_parallel_mode", new ConfigOptionString(mode));
+    }
+    update_slice_result_valid_state(false);
+    m_ixex_zones_mode_cache = "\x01"; // force zone rebuild
+}
+
+void PartPlate::reset_ixex_mode()
+{
+    m_config.erase("ixex_parallel_mode");
+    update_slice_result_valid_state(false);
+    m_ixex_zones_mode_cache = "\x01";
+}
+
 void PartPlate::set_spiral_vase_mode(bool spiral_mode, bool as_global)
 {
 	std::string key = "spiral_mode";
@@ -475,9 +503,14 @@ void PartPlate::calc_ixex_zones()
     if (!is_ixex_opt || !is_ixex_opt->value)
         return;
 
-    const DynamicPrintConfig& process_cfg = wxGetApp().preset_bundle->prints.get_edited_preset().config;
-    auto* mode_opt = process_cfg.option<ConfigOptionString>("ixex_parallel_mode");
-    std::string active_mode = mode_opt ? mode_opt->value : "primary";
+    // Per-plate mode takes priority over the process preset.
+    std::string active_mode = get_ixex_mode();
+    if (active_mode == "primary") {
+        const DynamicPrintConfig& process_cfg = wxGetApp().preset_bundle->prints.get_edited_preset().config;
+        auto* mode_opt = process_cfg.option<ConfigOptionString>("ixex_parallel_mode");
+        if (mode_opt && !mode_opt->value.empty())
+            active_mode = mode_opt->value;
+    }
     if (active_mode == "primary" || active_mode.empty())
         return;
 
@@ -767,7 +800,8 @@ void PartPlate::calc_ixex_zones()
 }
 
 // Build a cache key from the current iXex config options, or "" if iXex is off.
-static std::string build_ixex_cache_key()
+// Reads per-plate mode from m_config first, falling back to the process preset.
+std::string PartPlate::build_ixex_cache_key() const
 {
     if (!wxGetApp().preset_bundle)
         return "";
@@ -775,14 +809,20 @@ static std::string build_ixex_cache_key()
     auto* is_ixex_opt = printer_cfg.option<ConfigOptionBool>("is_ixex");
     if (!is_ixex_opt || !is_ixex_opt->value)
         return "";
-    const DynamicPrintConfig& process_cfg = wxGetApp().preset_bundle->prints.get_edited_preset().config;
-    auto* mode_opt  = process_cfg.option<ConfigOptionString>("ixex_parallel_mode");
+    // Per-plate mode takes priority over process preset.
+    std::string active_mode = get_ixex_mode();
+    if (active_mode == "primary") {
+        const DynamicPrintConfig& process_cfg = wxGetApp().preset_bundle->prints.get_edited_preset().config;
+        auto* mode_opt = process_cfg.option<ConfigOptionString>("ixex_parallel_mode");
+        if (mode_opt && !mode_opt->value.empty())
+            active_mode = mode_opt->value;
+    }
     auto* n_col_opt = printer_cfg.option<ConfigOptionInt>("ixex_tools_per_gantry");
     auto* n_row_opt = printer_cfg.option<ConfigOptionInt>("ixex_gantry_count");
     auto* cw_opt    = printer_cfg.option<ConfigOptionFloat>("ixex_nozzle_clearance_x");
     auto* ch_opt    = printer_cfg.option<ConfigOptionFloat>("ixex_nozzle_clearance_y");
     auto* mgn_opt   = printer_cfg.option<ConfigOptionFloat>("ixex_carriage_margin");
-    return (mode_opt ? mode_opt->value : "primary")
+    return active_mode
          + "|" + std::to_string(n_col_opt ? n_col_opt->value : 2)
          + "x" + std::to_string(n_row_opt ? n_row_opt->value : 1)
          + "|cw" + std::to_string(cw_opt ? (int)cw_opt->value : 0)
@@ -1643,6 +1683,20 @@ void PartPlate::render_icons(bool bottom, bool only_name, int hover_id)
             } else
                 render_icon_texture(m_move_front_icon.model, m_partplate_list->m_move_front_texture);
 
+            // iXex mode icon — only when is_ixex is active
+            {
+                PresetBundle* pb = wxGetApp().preset_bundle;
+                auto* is_ixex_opt = pb ? pb->printers.get_edited_preset().config.option<ConfigOptionBool>("is_ixex") : nullptr;
+                if (is_ixex_opt && is_ixex_opt->value) {
+                    if (hover_id == (int)PLATE_IXEX_MODE_ID) {
+                        render_icon_texture(m_ixex_mode_icon.model, m_partplate_list->m_ixex_mode_hovered_texture);
+                        std::string cur = get_ixex_mode();
+                        show_tooltip(_u8L("iXex mode: ") + cur + _u8L(" (left-click to cycle, right-click for menu)"));
+                    } else {
+                        render_icon_texture(m_ixex_mode_icon.model, m_partplate_list->m_ixex_mode_texture);
+                    }
+                }
+            }
 
 			if (m_partplate_list->render_plate_settings) {
 				bool has_plate_settings = get_bed_type() != BedType::btDefault || get_print_seq() != PrintSequence::ByDefault || !get_first_layer_print_sequence().empty() || !get_other_layers_print_sequence().empty() || has_spiral_mode_config();
@@ -1952,6 +2006,13 @@ void PartPlate::register_raycasters_for_picking(GLCanvas3D &canvas)
     bool dual_bbl = (preset && preset->is_bbl_vendor() && preset->get_printer_extruder_count() == 2);
     if (dual_bbl)
         register_model_for_picking(canvas, m_plate_filament_map_icon, picking_id_component(PLATE_FILAMENT_MAP_ID));
+
+    // Register iXex mode icon only when iXex is active on the current printer preset.
+    if (preset) {
+        auto* is_ixex_opt = preset->printers.get_edited_preset().config.option<ConfigOptionBool>("is_ixex");
+        if (is_ixex_opt && is_ixex_opt->value)
+            register_model_for_picking(canvas, m_ixex_mode_icon, picking_id_component(PLATE_IXEX_MODE_ID));
+    }
 }
 
 int PartPlate::picking_id_component(int idx) const
@@ -3604,6 +3665,11 @@ bool PartPlate::set_shape(const Pointfs& shape, const Pointfs& exclude_areas, co
 			dual_bbl = (preset->is_bbl_vendor() && preset->get_printer_extruder_count() == 2);
 			calc_vertex_for_icons(dual_bbl ? 5 : 6, m_plate_filament_map_icon);
 			calc_vertex_for_icons(dual_bbl ? 6 : 5, m_move_front_icon);
+			{
+				auto* is_ixex_opt = preset->printers.get_edited_preset().config.option<ConfigOptionBool>("is_ixex");
+				if (is_ixex_opt && is_ixex_opt->value)
+					calc_vertex_for_icons(dual_bbl ? 7 : 6, m_ixex_mode_icon);
+			}
 
 			calc_vertex_for_number(0, false, m_plate_idx_icon);
 			// calc vertex for plate name
@@ -4473,6 +4539,20 @@ void PartPlateList::generate_icon_textures()
 		}
 	}
 
+    // iXex mode icon textures (fall back gracefully if SVG not present yet)
+    {
+        file_name = path + (m_is_dark ? "plate_ixex_mode_dark.svg" : "plate_ixex_mode.svg");
+        if (!m_ixex_mode_texture.load_from_svg_file(file_name, true, false, false, icon_size)) {
+            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":load file %1% failed (iXex mode icon)") % file_name;
+        }
+    }
+    {
+        file_name = path + (m_is_dark ? "plate_ixex_mode_hover_dark.svg" : "plate_ixex_mode_hover.svg");
+        if (!m_ixex_mode_hovered_texture.load_from_svg_file(file_name, true, false, false, icon_size)) {
+            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":load file %1% failed (iXex mode hover icon)") % file_name;
+        }
+    }
+
 	std::string text_str = "01";
     // ORCA also scale font size to prevent low res texture
     int size = wxGetApp().em_unit() * PARTPLATE_ICON_SIZE;
@@ -4516,6 +4596,8 @@ void PartPlateList::release_icon_textures()
     m_plate_set_filament_map_hovered_texture.reset();
 	m_plate_name_edit_texture.reset();
 	m_plate_name_edit_hovered_texture.reset();
+    m_ixex_mode_texture.reset();
+    m_ixex_mode_hovered_texture.reset();
 	for (int i = 0;i < MAX_PLATE_COUNT; i++) {
 		m_idx_textures[i].reset();
 	}

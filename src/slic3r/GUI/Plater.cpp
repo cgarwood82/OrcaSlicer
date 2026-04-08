@@ -17640,7 +17640,61 @@ int Plater::select_plate_by_hover_id(int hover_id, bool right_click, bool isModi
         update();
         p->partplate_list.select_plate(0);
     }
+    else if (action == (int)PartPlate::PLATE_IXEX_MODE_ID)
+    {
+        ret = select_plate(plate_index);
+        if (!ret) {
+            PartPlate* curr_plate = p->partplate_list.get_curr_plate();
+            // Build ordered mode list: "primary" first, then all named modes.
+            std::vector<std::string> modes;
+            modes.push_back("primary");
+            const DynamicPrintConfig& printer_cfg = wxGetApp().preset_bundle->printers.get_edited_preset().config;
+            auto* names_opt = printer_cfg.option<ConfigOptionStrings>("ixex_mode_names");
+            if (names_opt) {
+                for (const auto& n : names_opt->values)
+                    if (!n.empty()) modes.push_back(n);
+            }
 
+            if (right_click) {
+                // Show a popup menu with all modes.
+                wxMenu menu;
+                std::string current = curr_plate->get_ixex_mode();
+                for (size_t i = 0; i < modes.size(); ++i) {
+                    wxMenuItem* item = menu.AppendRadioItem(wxID_HIGHEST + (int)i, from_u8(modes[i]));
+                    if (modes[i] == current)
+                        item->Check(true);
+                }
+                menu.Bind(wxEVT_MENU, [this, curr_plate, &modes](wxCommandEvent& e) {
+                    int idx = e.GetId() - wxID_HIGHEST;
+                    if (idx >= 0 && idx < (int)modes.size()) {
+                        take_snapshot("set ixex mode");
+                        curr_plate->set_ixex_mode(modes[idx]);
+                        update_project_dirty_from_presets();
+                        set_plater_dirty(true);
+                        update();
+                    }
+                });
+                p->view3D->get_canvas3d()->get_wxglcanvas()->PopupMenu(&menu);
+                ret = 1; // signal to caller: popup was shown, suppress plate context menu
+            } else {
+                // Left-click: cycle to next mode.
+                std::string current = curr_plate->get_ixex_mode();
+                auto it = std::find(modes.begin(), modes.end(), current);
+                size_t next_idx = (it == modes.end()) ? 0 : ((it - modes.begin() + 1) % modes.size());
+                std::string next_mode = modes[next_idx];
+                if (next_mode != current) {
+                    take_snapshot("set ixex mode");
+                    curr_plate->set_ixex_mode(next_mode);
+                    update_project_dirty_from_presets();
+                    set_plater_dirty(true);
+                    update();
+                }
+            }
+        } else {
+            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << "can not select plate %1%" << plate_index;
+            ret = -1;
+        }
+    }
     else
     {
         BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << "invalid action %1%, with right_click=%2%" << action << right_click;

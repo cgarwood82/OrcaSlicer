@@ -2675,26 +2675,6 @@ void TabPrint::build()
 
         optgroup->append_single_option_line("timelapse_type", "others_settings_special_mode#timelapse");
         optgroup->append_single_option_line("enable_wrapping_detection");
-        // Dynamic combo box — choices come from the printer preset's ixex_mode_names.
-        // Use create_line_with_widget so the undo bitmaps are set (has_undo_ui()=true),
-        // ensuring the widget x-position matches other option fields in OG_CustomCtrl.
-        create_line_with_widget(optgroup.get(), "ixex_parallel_mode", "", [this](wxWindow* parent) -> wxSizer* {
-            m_ixex_mode_combo = new ComboBox(parent, wxID_ANY, wxEmptyString,
-                                            wxDefaultPosition,
-                                            wxSize(12 * wxGetApp().em_unit(), -1),
-                                            0, nullptr, wxCB_READONLY);
-            m_ixex_mode_combo->GetDropDown().SetUseContentWidth(true);
-            refresh_ixex_mode_combo();
-            m_ixex_mode_combo->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent&) {
-                if (!m_ixex_mode_combo || !m_config) return;
-                std::string val = m_ixex_mode_combo->GetStringSelection().ToStdString();
-                m_config->set_key_value("ixex_parallel_mode", new ConfigOptionString(val));
-                on_value_change("ixex_parallel_mode", val);
-            });
-            auto* s = new wxBoxSizer(wxHORIZONTAL);
-            s->Add(m_ixex_mode_combo, 0, wxALIGN_CENTER_VERTICAL);
-            return s;
-        });
 
         optgroup = page->new_optgroup(L("Fuzzy Skin"), L"fuzzy_skin");
         optgroup->append_single_option_line("fuzzy_skin", "others_settings_fuzzy_skin");
@@ -2753,36 +2733,6 @@ void TabPrint::reload_config()
 {
     this->compatible_widget_reload(m_compatible_printers);
     Tab::reload_config();
-    refresh_ixex_mode_combo();
-}
-
-void TabPrint::refresh_ixex_mode_combo()
-{
-    if (!m_ixex_mode_combo) return;
-    // Rebuild choices: "primary" + names from the active printer preset
-    m_ixex_mode_combo->Clear();
-    m_ixex_mode_combo->Append("primary");
-    if (m_preset_bundle) {
-        auto* names = m_preset_bundle->printers.get_edited_preset().config
-                          .option<ConfigOptionStrings>("ixex_mode_names");
-        if (names) {
-            for (const auto& n : names->values)
-                if (!n.empty()) m_ixex_mode_combo->Append(wxString::FromUTF8(n));
-        }
-    }
-    // Restore current selection from process config (safe: option may not exist in older presets)
-    std::string cur = "primary";
-    if (m_config) {
-        auto* opt = m_config->option<ConfigOptionString>("ixex_parallel_mode");
-        if (opt) cur = opt->value;
-    }
-    if (!m_ixex_mode_combo->SetStringSelection(cur)) {
-        m_ixex_mode_combo->SetSelection(0); // fall back to "primary"
-        // The active mode no longer exists — reset config so stale name doesn't crash downstream.
-        if (m_config)
-            m_config->set_key_value("ixex_parallel_mode", new ConfigOptionString("primary"));
-        on_value_change("ixex_parallel_mode", std::string("primary"));
-    }
 }
 
 void TabPrint::update_description_lines()
@@ -2904,7 +2854,6 @@ void TabPrint::clear_pages()
 
     m_recommended_thin_wall_thickness_description_line = nullptr;
     m_top_bottom_shell_thickness_explanation = nullptr;
-    m_ixex_mode_combo = nullptr;
 }
 
 //BBS: GUI refactor
@@ -5060,9 +5009,6 @@ void TabPrinter::build_fff()
                     m_config->set_key_value("ixex_mode_gcodes",       new ConfigOptionStrings(gcodes));
                     update_dirty();
                     on_value_change("ixex_mode_names", std::string(""));
-                    // Refresh the process tab's mode dropdown immediately
-                    if (auto* print_tab = dynamic_cast<TabPrint*>(wxGetApp().get_tab(Preset::TYPE_PRINT)))
-                        print_tab->refresh_ixex_mode_combo();
                 };
                 auto* sizer = new wxBoxSizer(wxHORIZONTAL);
                 sizer->Add(m_ixex_modes_ctrl, 1, wxEXPAND);

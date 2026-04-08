@@ -333,6 +333,7 @@ static constexpr const char* FIRST_LAYER_PRINT_SEQUENCE_ATTR = "first_layer_prin
 static constexpr const char* OTHER_LAYERS_PRINT_SEQUENCE_ATTR = "other_layers_print_sequence";
 static constexpr const char* OTHER_LAYERS_PRINT_SEQUENCE_NUMS_ATTR = "other_layers_print_sequence_nums";
 static constexpr const char* SPIRAL_VASE_MODE = "spiral_mode";
+static constexpr const char* IXEX_PARALLEL_MODE_ATTR = "ixex_parallel_mode";
 static constexpr const char* FILAMENT_MAP_MODE_ATTR = "filament_map_mode";
 static constexpr const char* FILAMENT_MAP_ATTR = "filament_maps";
 static constexpr const char* LIMIT_FILAMENT_MAP_ATTR = "limit_filament_maps";
@@ -4292,6 +4293,9 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 std::istringstream(value) >> std::boolalpha >> spiral_mode;
                 m_curr_plater->config.set_key_value("spiral_mode", new ConfigOptionBool(spiral_mode));
             }
+            else if (key == IXEX_PARALLEL_MODE_ATTR) {
+                m_curr_plater->config.set_key_value("ixex_parallel_mode", new ConfigOptionString(value));
+            }
             else if (key == FILAMENT_MAP_MODE_ATTR)
             {
                 FilamentMapMode map_mode = FilamentMapMode::fmmAutoForFlush;
@@ -7772,6 +7776,12 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 ConfigOption* spiral_mode_opt = plate_data->config.option("spiral_mode");
                 if (spiral_mode_opt)
                     stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << SPIRAL_VASE_MODE << "\" " << VALUE_ATTR << "=\"" << spiral_mode_opt->getBool() << "\"/>\n";
+
+                {
+                    auto* ixex_mode_opt = plate_data->config.option<ConfigOptionString>("ixex_parallel_mode");
+                    if (ixex_mode_opt && !ixex_mode_opt->value.empty() && ixex_mode_opt->value != "primary")
+                        stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << IXEX_PARALLEL_MODE_ATTR << "\" " << VALUE_ATTR << "=\"" << ixex_mode_opt->value << "\"/>\n";
+                }
 
                 //filament map related
                 ConfigOption* filament_map_mode_opt = plate_data->config.option("filament_map_mode");
