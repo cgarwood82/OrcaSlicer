@@ -4519,6 +4519,9 @@ private:
         std::vector<int>     btn_states; // parallel to btns
         // tool_idx for btns[i]: computed during add_row, stored here for quick lookup
         std::vector<int>     btn_tool_idx;
+        // Full assignment map including tools not currently visible due to grid size.
+        // Preserved across grid resizes so assignments restore when grid expands again.
+        std::map<int,int>    all_tool_states;
     };
 
     void add_row(const std::string& name = "",
@@ -4536,6 +4539,7 @@ private:
         auto* grid_sizer = new wxGridSizer(m_n_rows, m_n_cols, 2, 2);
 
         auto tool_states = parse_tool_states(active_tools);
+        r.all_tool_states = tool_states; // preserve all assignments, including off-screen tools
         wxPanel* this_panel = r.panel;
 
         // Buttons rendered top=rear (high Y), bottom=front (low Y).
@@ -4545,11 +4549,21 @@ private:
         // Display iterates: row from n_rows-1 down to 0 (rear→front = top→bottom).
         // raw_row = flip_y ? (n_rows-1-row) : row
         // raw_col = flip_x ? (n_cols-1-col) : col
+        //
+        // row_start: anchor displayed rows to the gantry row containing the Primary
+        // assignment, so reducing gantry count keeps the meaningful row visible.
+        int primary_gantry_row = 0;
+        for (const auto& [idx, state] : tool_states) {
+            if (state == 1) { primary_gantry_row = idx / m_n_cols; break; }
+        }
+        int row_start = primary_gantry_row; // display rows [row_start .. row_start+m_n_rows-1]
+
         bool flip_x = (m_layout == 1 || m_layout == 3);
         bool flip_y = (m_layout == 2 || m_layout == 3);
         for (int row = m_n_rows - 1; row >= 0; --row) {
             for (int col = 0; col < m_n_cols; ++col) {
                 int raw_row = flip_y ? (m_n_rows - 1 - row) : row;
+                raw_row += row_start; // anchor to Primary's gantry row
                 int raw_col = flip_x ? (m_n_cols - 1 - col) : col;
                 int tool_idx = raw_row * m_n_cols + raw_col;
                 int state = 0;
@@ -4580,6 +4594,13 @@ private:
                         st = (st + 1) % 4;
                         if (st == 1 && other_primary)
                             st = 2; // skip Primary → go straight to Copy
+
+                        // Keep all_tool_states in sync so off-screen tools are preserved
+                        int tidx = row_ref.btn_tool_idx[btn_pos];
+                        if (st == 0)
+                            row_ref.all_tool_states.erase(tidx);
+                        else
+                            row_ref.all_tool_states[tidx] = st;
 
                         apply_btn(row_ref.btns[btn_pos], row_ref.btn_tool_idx[btn_pos], st);
                         notify();
@@ -4635,11 +4656,13 @@ private:
     }
 
     std::string active_tools_string(const Row& r) const {
+        // Serialize from all_tool_states (not just visible buttons) so assignments
+        // for off-screen tools are preserved across grid size changes.
         std::string s;
-        for (size_t i = 0; i < r.btn_states.size(); ++i) {
-            if (r.btn_states[i] == 0) continue;
+        for (const auto& [idx, state] : r.all_tool_states) {
+            if (state == 0) continue;
             if (!s.empty()) s += ',';
-            s += std::to_string(r.btn_tool_idx[i]) + ':' + state_role(r.btn_states[i]);
+            s += std::to_string(idx) + ':' + state_role(state);
         }
         return s;
     }
