@@ -16268,6 +16268,12 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
                  opt_key == "sparse_infill_filament" || opt_key == "solid_infill_filament") {
             update_scheduled = true;
         }
+        // IDEX/IQEX: when is_imex toggles the mode icon needs to be repositioned on every plate.
+        // set_shape() short-circuits when the bed geometry is unchanged, so we refresh explicitly.
+        else if (opt_key == "is_imex") {
+            p->partplate_list.refresh_imex_icons();
+            update_scheduled = true;
+        }
     }
 
     if (bed_shape_changed)
@@ -17652,7 +17658,7 @@ int Plater::select_plate_by_hover_id(int hover_id, bool right_click, bool isModi
             auto* names_opt = printer_cfg.option<ConfigOptionStrings>("imex_mode_names");
             if (names_opt) {
                 for (const auto& n : names_opt->values)
-                    if (!n.empty()) modes.push_back(n);
+                    if (!n.empty() && n != "primary") modes.push_back(n);
             }
 
             if (right_click) {

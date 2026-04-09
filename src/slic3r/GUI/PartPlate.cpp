@@ -579,6 +579,11 @@ void PartPlate::calc_imex_zones()
         }
     }
 
+    // If the mode name was found but has no tools (e.g. stale process-preset mode on a new
+    // printer that has no modes defined yet), there is nothing to compute.
+    if (tool_states.empty())
+        return;
+
     // Identify the Primary tool from the mode definition
     for (auto& [idx, state] : tool_states) {
         if (state == 1) { auto [c, r] = tool_to_phys(idx); pri_col = c; pri_row = r; break; }
@@ -601,8 +606,33 @@ void PartPlate::calc_imex_zones()
     auto bed_ext = get_extents(m_shape);
     double x_min = bed_ext.min(0), x_max = bed_ext.max(0);
     double y_min = bed_ext.min(1), y_max = bed_ext.max(1);
-    double zone_w = (x_max - x_min) / n_cols;
-    double zone_h = (y_max - y_min) / n_rows;
+
+    // Zone sizing is based on ACTIVE tool count per axis, not total grid dimensions.
+    // Inactive tools (absent from tool_states) donate their bed share to active neighbors.
+    // Sorted active col/row lists map physical index k → zone index k.
+    std::vector<int> active_cols_v, active_rows_v;
+    {
+        std::set<int> ac_set, ar_set;
+        for (auto& [idx, state] : tool_states) {
+            auto [c, r] = tool_to_phys(idx);
+            ac_set.insert(c); ar_set.insert(r);
+        }
+        active_cols_v.assign(ac_set.begin(), ac_set.end()); // sorted ascending
+        active_rows_v.assign(ar_set.begin(), ar_set.end());
+    }
+    int n_active_cols = std::max(1, (int)active_cols_v.size());
+    int n_active_rows = std::max(1, (int)active_rows_v.size());
+
+    std::map<int,int> col_to_zone, row_to_zone;
+    for (int k = 0; k < n_active_cols; ++k) col_to_zone[active_cols_v[k]] = k;
+    for (int k = 0; k < n_active_rows; ++k) row_to_zone[active_rows_v[k]] = k;
+
+    double zone_w = (x_max - x_min) / n_active_cols;
+    double zone_h = (y_max - y_min) / n_active_rows;
+
+    // Zone index of the primary tool
+    int pri_col_k = col_to_zone.count(pri_col) ? col_to_zone[pri_col] : 0;
+    int pri_row_k = row_to_zone.count(pri_row) ? row_to_zone[pri_row] : 0;
 
     // Separation axes: row-sep = secondaries on a different gantry, col-sep = different column
     bool has_row_sep = false, has_col_sep = false;
@@ -647,18 +677,26 @@ void PartPlate::calc_imex_zones()
     auto make_boxes = [&](const std::set<std::pair<int,int>>& cells) -> std::vector<BoxRect> {
         std::vector<BoxRect> boxes;
         if (cells.empty()) return boxes;
+        auto ck = [&](int c) { return col_to_zone.count(c) ? col_to_zone.at(c) : 0; };
+        auto rk = [&](int r) { return row_to_zone.count(r) ? row_to_zone.at(r) : 0; };
         if (has_row_sep && !has_col_sep) {
             std::set<int> rows; for (auto& [c,r] : cells) rows.insert(r);
-            for (int sr : rows)
-                boxes.push_back({x_min, x_max, y_min + sr*zone_h, y_min + (sr+1)*zone_h});
+            for (int sr : rows) {
+                int k = rk(sr);
+                boxes.push_back({x_min, x_max, y_min + k*zone_h, y_min + (k+1)*zone_h});
+            }
         } else if (has_col_sep && !has_row_sep) {
             std::set<int> cols; for (auto& [c,r] : cells) cols.insert(c);
-            for (int sc : cols)
-                boxes.push_back({x_min + sc*zone_w, x_min + (sc+1)*zone_w, y_min, y_max});
+            for (int sc : cols) {
+                int k = ck(sc);
+                boxes.push_back({x_min + k*zone_w, x_min + (k+1)*zone_w, y_min, y_max});
+            }
         } else {
-            for (auto& [sc,sr] : cells)
-                boxes.push_back({x_min + sc*zone_w, x_min + (sc+1)*zone_w,
-                                 y_min + sr*zone_h,  y_min + (sr+1)*zone_h});
+            for (auto& [sc,sr] : cells) {
+                int ck_ = ck(sc), rk_ = rk(sr);
+                boxes.push_back({x_min + ck_*zone_w, x_min + (ck_+1)*zone_w,
+                                 y_min + rk_*zone_h,  y_min + (rk_+1)*zone_h});
+            }
         }
         return boxes;
     };
@@ -718,11 +756,11 @@ void PartPlate::calc_imex_zones()
         }
     };
 
-    // Primary zone extent — mirrors in_primary_zone / make_boxes expansion logic
-    double pz_x0 = has_col_sep ? x_min + pri_col       * zone_w : x_min;
-    double pz_x1 = has_col_sep ? x_min + (pri_col + 1) * zone_w : x_max;
-    double pz_y0 = has_row_sep ? y_min + pri_row        * zone_h : y_min;
-    double pz_y1 = has_row_sep ? y_min + (pri_row + 1)  * zone_h : y_max;
+    // Primary zone extent — uses zone indices so inactive tools don't shrink the zone
+    double pz_x0 = has_col_sep ? x_min + pri_col_k       * zone_w : x_min;
+    double pz_x1 = has_col_sep ? x_min + (pri_col_k + 1) * zone_w : x_max;
+    double pz_y0 = has_row_sep ? y_min + pri_row_k        * zone_h : y_min;
+    double pz_y1 = has_row_sep ? y_min + (pri_row_k + 1)  * zone_h : y_max;
     m_imex_primary_zone_box = BoundingBoxf(Vec2d(pz_x0, pz_y0), Vec2d(pz_x1, pz_y1));
 
     // Helper: build a BoundingBoxf3 strip, clip to bed, add to members
@@ -753,26 +791,27 @@ void PartPlate::calc_imex_zones()
     for (auto& [idx, state] : tool_states) {
         if (state != 3) continue; // only mirror tools (state==3) require collision strips
         auto [c, r] = tool_to_phys(idx);
-        // X-boundary strips: any mirror in an adjacent column can cause an X collision.
-        if (c == pri_col + 1) has_right_sec  = true;
-        if (c == pri_col - 1) has_left_sec   = true;
-        // Y-boundary strips: only a mirror DIRECTLY above/below (same column) causes a Y collision.
-        // A mirror in a different column that happens to be in an adjacent row is only an X risk.
-        if (r == pri_row + 1 && c == pri_col) has_top_sec    = true;
-        if (r == pri_row - 1 && c == pri_col) has_bottom_sec = true;
+        int zc = col_to_zone.count(c) ? col_to_zone.at(c) : -1;
+        int zr = row_to_zone.count(r) ? row_to_zone.at(r) : -1;
+        // X-boundary strips: mirror in the zone immediately adjacent to the primary zone.
+        if (zc == pri_col_k + 1) has_right_sec = true;
+        if (zc == pri_col_k - 1) has_left_sec  = true;
+        // Y-boundary strips: mirror zone-adjacent in Y, same physical column as primary.
+        if (zr == pri_row_k + 1 && c == pri_col) has_top_sec    = true;
+        if (zr == pri_row_k - 1 && c == pri_col) has_bottom_sec = true;
     }
 
     // X-axis boundaries (vertical strips, width = nozzle_clearance_x on primary side)
     if (carriage_w > 0.0) {
         if (has_right_sec) {
-            double bnd_x = x_min + (pri_col + 1) * zone_w;
+            double bnd_x = x_min + (pri_col_k + 1) * zone_w;
             double strip_inner = bnd_x - carriage_w;
             add_strip(strip_inner, bnd_x, pz_y0, pz_y1);
             if (margin > 0.0)
                 add_margin_fill(strip_inner - margin, strip_inner, pz_y0, pz_y1);
         }
         if (has_left_sec) {
-            double bnd_x = x_min + pri_col * zone_w;
+            double bnd_x = x_min + pri_col_k * zone_w;
             double strip_inner = bnd_x + carriage_w;
             add_strip(bnd_x, strip_inner, pz_y0, pz_y1);
             if (margin > 0.0)
@@ -783,14 +822,14 @@ void PartPlate::calc_imex_zones()
     // Y-axis boundaries (horizontal strips, width = nozzle_clearance_y on primary side)
     if (carriage_h > 0.0) {
         if (has_top_sec) {
-            double bnd_y = y_min + (pri_row + 1) * zone_h;
+            double bnd_y = y_min + (pri_row_k + 1) * zone_h;
             double strip_inner = bnd_y - carriage_h;
             add_strip(pz_x0, pz_x1, strip_inner, bnd_y);
             if (margin > 0.0)
                 add_margin_fill(pz_x0, pz_x1, strip_inner - margin, strip_inner);
         }
         if (has_bottom_sec) {
-            double bnd_y = y_min + pri_row * zone_h;
+            double bnd_y = y_min + pri_row_k * zone_h;
             double strip_inner = bnd_y + carriage_h;
             add_strip(pz_x0, pz_x1, bnd_y, strip_inner);
             if (margin > 0.0)
@@ -828,6 +867,20 @@ std::string PartPlate::build_imex_cache_key() const
          + "|cw" + std::to_string(cw_opt ? (int)cw_opt->value : 0)
          + "|ch" + std::to_string(ch_opt ? (int)ch_opt->value : 0)
          + "|mg" + std::to_string(mgn_opt ? (int)(mgn_opt->value * 10) : 0);
+}
+
+// Reposition the IMEX mode icon without requiring a full set_shape() rebuild.
+// Called when is_imex is toggled on a printer whose bed shape matches the current plate,
+// which would otherwise cause set_shape() to short-circuit before reaching icon calc.
+void PartPlate::refresh_imex_icon()
+{
+    if (!m_plater) return;
+    PresetBundle* preset = wxGetApp().preset_bundle;
+    if (!preset) return;
+    bool dual_bbl = preset->is_bbl_vendor() && preset->get_printer_extruder_count() == 2;
+    auto* is_imex_opt = preset->printers.get_edited_preset().config.option<ConfigOptionBool>("is_imex");
+    if (is_imex_opt && is_imex_opt->value)
+        calc_vertex_for_icons(dual_bbl ? 7 : 6, m_imex_mode_icon);
 }
 
 // Ensure zone geometry (secondary boxes, collision strips, visual meshes) is up to date.
@@ -7188,6 +7241,13 @@ void PartPlateList::load_cali_textures()
 		}
 	}
 	PartPlateList::is_load_cali_texture = true;
+}
+
+void PartPlateList::refresh_imex_icons()
+{
+    const std::lock_guard<std::mutex> local_lock(m_plates_mutex);
+    for (PartPlate* plate : m_plate_list)
+        plate->refresh_imex_icon();
 }
 
 void PartPlateList::on_extruder_count_changed(int extruder_count)

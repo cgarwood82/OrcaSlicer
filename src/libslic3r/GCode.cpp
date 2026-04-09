@@ -3058,7 +3058,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     // macro is active before any motion, homing, or probing in start G-code.
     if (print.config().is_imex.value && !print.objects().empty()) {
         const std::string& imex_mode = print.objects().front()->config().imex_parallel_mode.value;
-        if (!imex_mode.empty() && imex_mode != "primary") {
+        if (!imex_mode.empty()) {
             const auto& mode_names  = print.config().imex_mode_names.values;
             const auto& mode_gcodes = print.config().imex_mode_gcodes.values;
             for (size_t i = 0; i < mode_names.size() && i < mode_gcodes.size(); ++i) {

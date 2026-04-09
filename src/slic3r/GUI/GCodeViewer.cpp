@@ -1652,78 +1652,99 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
                             return flip_y ? (gantry_count - 1 - raw) : raw;
                         };
 
-                        const Vec3f prim_pos         = libvgcode::convert(curr_vertex.position);
-                        const float strip_width      = (bed_x_max - bed_x_min) / (float)tools_per_gantry;
-                        const float row_strip_height = (bed_y_max - bed_y_min) / (float)gantry_count;
-                        const int   pri_phys_col     = (pri_tool >= 0) ? phys_col_of(pri_tool) : 0;
-                        const int   pri_phys_row     = (pri_tool >= 0) ? phys_row_of(pri_tool) : 0;
+                        // Build active col/row sets — mirrors PartPlate::calc_imex_zones() so
+                        // zone sizes and positions stay in sync with the bed visualization.
+                        const int   pri_phys_col = (pri_tool >= 0) ? phys_col_of(pri_tool) : 0;
+                        const int   pri_phys_row = (pri_tool >= 0) ? phys_row_of(pri_tool) : 0;
+                        std::map<int,int> phys_col_to_zone_gv, phys_row_to_zone_gv;
+                        int n_active_cols_gv = 1, n_active_rows_gv = 1;
+                        {
+                            std::set<int> ac, ar;
+                            ac.insert(pri_phys_col); ar.insert(pri_phys_row);
+                            for (int tid : sec_tool_ids) {
+                                ac.insert(phys_col_of(tid));
+                                ar.insert(phys_row_of(tid));
+                            }
+                            // col_to_zone / row_to_zone: physical index → zone index (sorted)
+                            int k = 0;
+                            for (int c : ac) phys_col_to_zone_gv[c] = k++;
+                            k = 0;
+                            for (int r : ar) phys_row_to_zone_gv[r] = k++;
+                            n_active_cols_gv = (int)ac.size();
+                            n_active_rows_gv = (int)ar.size();
+                        }
+                        auto zone_col = [&](int pc) { auto it = phys_col_to_zone_gv.find(pc); return it != phys_col_to_zone_gv.end() ? it->second : 0; };
+                        auto zone_row = [&](int pr) { auto it = phys_row_to_zone_gv.find(pr); return it != phys_row_to_zone_gv.end() ? it->second : 0; };
 
-                        // Pre-pass: for each physical row, find the Copy reference column.
+                        const Vec3f prim_pos         = libvgcode::convert(curr_vertex.position);
+                        const float strip_width      = (bed_x_max - bed_x_min) / (float)n_active_cols_gv;
+                        const float row_strip_height = (bed_y_max - bed_y_min) / (float)n_active_rows_gv;
+                        const int   pri_zone_col     = zone_col(pri_phys_col);
+                        const int   pri_zone_row     = zone_row(pri_phys_row);
+
+                        // Pre-pass: for each physical row, find the Copy reference physical column.
                         // The primary row's reference is the primary itself.
-                        // Non-primary rows need a Copy tool; Mirror tools on that row
-                        // reflect that Copy's X position.
-                        std::map<int,int> row_copy_col;
+                        std::map<int,int> row_copy_col; // phys_row → phys_col of copy reference
                         row_copy_col[pri_phys_row] = pri_phys_col;
                         for (int i = 0; i < sec_count; ++i) {
-                            if (sec_tool_states[sec_tool_ids[i]] == 2) {
-                                row_copy_col[phys_row_of(sec_tool_ids[i])] =
-                                    phys_col_of(sec_tool_ids[i]);
-                            }
+                            if (sec_tool_states[sec_tool_ids[i]] == 2)
+                                row_copy_col[phys_row_of(sec_tool_ids[i])] = phys_col_of(sec_tool_ids[i]);
                         }
 
-                        // Primary carriage box: nozzle sits at the collision-side edge.
-                        // Default to centered; override once we know which side the secondaries are on.
-                        float pri_box_offset_x = (pri_phys_col == 0) ? 0.0f : -imex_box_wx; // nozzle at inner edge (facing center of bed)
-                        float pri_box_offset_y = -imex_box_wy;        // nozzle at high-Y edge by default (gantry always behind nozzle); override if secondary is behind
+                        // Primary carriage box
+                        float pri_box_offset_x = (pri_zone_col == 0) ? 0.0f : -imex_box_wx;
+                        float pri_box_offset_y = -imex_box_wy;
                         for (int i = 0; i < sec_count; ++i) {
                             int sc = phys_col_of(sec_tool_ids[i]);
                             int sr = phys_row_of(sec_tool_ids[i]);
-                            if      (sc > pri_phys_col) { pri_box_offset_x = 0.0f;          }
-                            else if (sc < pri_phys_col) { pri_box_offset_x = -imex_box_wx;  }
-                            if      (sr > pri_phys_row) { pri_box_offset_y = 0.0f;          }
-                            else if (sr < pri_phys_row) { pri_box_offset_y = -imex_box_wy;  }
+                            if      (sc > pri_phys_col) { pri_box_offset_x = 0.0f;         }
+                            else if (sc < pri_phys_col) { pri_box_offset_x = -imex_box_wx; }
+                            if      (sr > pri_phys_row) { pri_box_offset_y = 0.0f;         }
+                            else if (sr < pri_phys_row) { pri_box_offset_y = -imex_box_wy; }
                         }
                         carriage_box_draws.push_back({ prim_pos, s_carriage_colors[0], pri_box_offset_x, pri_box_offset_y });
 
-                        const float pri_zone_x = bed_x_min + (float)pri_phys_col * strip_width;
-                        const float pri_zone_y = bed_y_min + (float)pri_phys_row * row_strip_height;
+                        const float pri_zone_x = bed_x_min + (float)pri_zone_col * strip_width;
+                        const float pri_zone_y = bed_y_min + (float)pri_zone_row * row_strip_height;
                         const float rel_x      = prim_pos.x() - pri_zone_x;
                         const float rel_y      = prim_pos.y() - pri_zone_y;
 
                         for (int i = 0; i < sec_count; ++i) {
                             int sec_phys_col = phys_col_of(sec_tool_ids[i]);
                             int sec_phys_row = phys_row_of(sec_tool_ids[i]);
+                            int sec_zc       = zone_col(sec_phys_col);
+                            int sec_zr       = zone_row(sec_phys_row);
                             const int sec_state = sec_tool_states[sec_tool_ids[i]];
 
-                            // Y: all tools in a row share a Y rail, so Y is always
-                            // zone-relative copy from the primary.
-                            float sec_zone_y = bed_y_min + (float)sec_phys_row * row_strip_height;
+                            // Y: all tools on a row share a Y rail — always zone-relative copy.
+                            float sec_zone_y = bed_y_min + (float)sec_zr * row_strip_height;
                             float sec_y      = sec_zone_y + rel_y;
 
-                            // X: Copy places the tool at the same relative position within
-                            // its own zone.  Mirror reflects the Copy reference on this row.
+                            // X: Copy → same zone-relative position.
+                            // Mirror → reflect copy reference across the boundary it shares with
+                            // this mirror zone (left or right edge of copy zone depending on side).
                             float sec_x;
                             if (sec_state == 2) {
-                                float sec_zone_x = bed_x_min + (float)sec_phys_col * strip_width;
-                                sec_x = sec_zone_x + rel_x;
+                                sec_x = bed_x_min + (float)sec_zc * strip_width + rel_x;
                             } else {
-                                // Mirror: find the Copy on the same row and reflect its X.
                                 auto ref_it = row_copy_col.find(sec_phys_row);
-                                if (ref_it != row_copy_col.end()) {
-                                    float ref_zone_x = bed_x_min + (float)ref_it->second * strip_width;
-                                    float ref_x = ref_zone_x + rel_x;
-                                    sec_x = bed_x_min + bed_x_max - ref_x;
+                                int ref_phys_col = (ref_it != row_copy_col.end()) ? ref_it->second : pri_phys_col;
+                                int ref_zc       = zone_col(ref_phys_col);
+                                float ref_zone_x = bed_x_min + (float)ref_zc * strip_width;
+                                float ref_abs    = ref_zone_x + rel_x;
+                                if (sec_phys_col < ref_phys_col) {
+                                    // Mirror left of copy — reflects across copy zone's left edge
+                                    sec_x = 2.0f * ref_zone_x - ref_abs;
                                 } else {
-                                    sec_x = bed_x_min + bed_x_max - prim_pos.x();
+                                    // Mirror right of copy — reflects across copy zone's right edge
+                                    float ref_zone_right = bed_x_min + (float)(ref_zc + 1) * strip_width;
+                                    sec_x = 2.0f * ref_zone_right - ref_abs;
                                 }
                             }
 
                             Vec3f sec_pos{ sec_x, sec_y, prim_pos.z() };
                             m_sequential_view.m_imex_secondary_markers[i].set_world_position(sec_pos);
                             m_sequential_view.m_imex_secondary_markers[i].set_z_offset(m_z_offset + 0.5f);
-                            // X: copy tools move in sync with primary so they share the same
-                            // X-facing orientation. Mirror tools approach from the opposite side
-                            // so the nozzle sits at the collision-side edge.
                             float sec_box_offset_x;
                             if (sec_state == 2) {
                                 sec_box_offset_x = pri_box_offset_x;
@@ -1732,8 +1753,6 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
                                 else if (sec_phys_col < pri_phys_col) sec_box_offset_x = 0.0f;
                                 else                                  sec_box_offset_x = pri_box_offset_x;
                             }
-                            // Y: always row-based — gantry is always behind nozzle regardless of
-                            // copy/mirror (a back-row copy still has its gantry at the back).
                             float sec_box_offset_y;
                             if      (sec_phys_row > pri_phys_row) sec_box_offset_y = -imex_box_wy;
                             else if (sec_phys_row < pri_phys_row) sec_box_offset_y = 0.0f;

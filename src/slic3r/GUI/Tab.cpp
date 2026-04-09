@@ -4431,7 +4431,7 @@ public:
         m_n_rows = n_rows;
         m_layout = layout;
         for (size_t i = 0; i < names.size(); ++i)
-            add_row(names[i], tools[i], gcodes[i]);
+            add_row(names[i], tools[i], gcodes[i], /*is_primary=*/(names[i] == "primary"));
         Layout();
     }
 
@@ -4440,11 +4440,31 @@ public:
         auto* names  = cfg.option<ConfigOptionStrings>("imex_mode_names");
         auto* tools  = cfg.option<ConfigOptionStrings>("imex_mode_active_tools");
         auto* gcodes = cfg.option<ConfigOptionStrings>("imex_mode_gcodes");
+
+        // Primary row is always first and non-deletable.  Look for an existing
+        // "primary" entry in the config (present in configs saved after #8 was
+        // implemented); fall back to empty tool/gcode for older configs.
+        std::string primary_tools, primary_gcode;
+        size_t primary_cfg_idx = std::string::npos;
+        if (names) {
+            for (size_t i = 0; i < names->values.size(); ++i) {
+                if (names->values[i] == "primary") {
+                    primary_cfg_idx = i;
+                    if (tools  && i < tools->values.size())  primary_tools = tools->values[i];
+                    if (gcodes && i < gcodes->values.size()) primary_gcode = gcodes->values[i];
+                    break;
+                }
+            }
+        }
+        add_row("primary", primary_tools, primary_gcode, /*is_primary=*/true);
+
         size_t n = names ? names->values.size() : 0;
-        for (size_t i = 0; i < n; ++i)
+        for (size_t i = 0; i < n; ++i) {
+            if (i == primary_cfg_idx) continue; // already added above
             add_row(names->values[i],
                     (tools  && i < tools->values.size())  ? tools->values[i]  : "",
                     (gcodes && i < gcodes->values.size()) ? gcodes->values[i] : "");
+        }
         Layout();
     }
 
@@ -4452,7 +4472,7 @@ public:
     get_mode_data() const {
         std::vector<std::string> names, tools, gcodes;
         for (auto& r : m_rows) {
-            std::string nm = r.name->GetValue().ToStdString();
+            std::string nm = r.is_primary ? "primary" : r.name->GetValue().ToStdString();
             if (nm.empty()) continue;
             names.push_back(nm);
             tools.push_back(active_tools_string(r));
@@ -4513,32 +4533,44 @@ private:
 
     struct Row {
         wxPanel*             panel;
-        wxTextCtrl*          name;
+        wxTextCtrl*          name;       // nullptr for primary row (name is fixed)
         wxTextCtrl*          gcode;
         std::vector<wxButton*> btns;
-        std::vector<int>     btn_states; // parallel to btns
-        // tool_idx for btns[i]: computed during add_row, stored here for quick lookup
+        std::vector<int>     btn_states;
         std::vector<int>     btn_tool_idx;
-        // Full assignment map including tools not currently visible due to grid size.
-        // Preserved across grid resizes so assignments restore when grid expands again.
         std::map<int,int>    all_tool_states;
+        bool                 is_primary {false};
     };
 
     void add_row(const std::string& name = "",
                  const std::string& active_tools = "",
-                 const std::string& gcode = "")
+                 const std::string& gcode = "",
+                 bool is_primary = false)
     {
         Row r;
+        r.is_primary = is_primary;
         r.panel = new wxPanel(this, wxID_ANY);
         auto* sizer = new wxBoxSizer(wxHORIZONTAL);
 
-        r.name = new wxTextCtrl(r.panel, wxID_ANY, name, wxDefaultPosition, wxSize(130, -1));
-        r.name->Bind(wxEVT_TEXT, [this](wxCommandEvent&) { notify(); });
+        if (is_primary) {
+            r.name = nullptr;
+            auto* lbl = new wxStaticText(r.panel, wxID_ANY, _L("Primary"),
+                                         wxDefaultPosition, wxSize(130, -1));
+            wxFont f = lbl->GetFont();
+            f.SetWeight(wxFONTWEIGHT_BOLD);
+            lbl->SetFont(f);
+            sizer->Add(lbl, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        } else {
+            r.name = new wxTextCtrl(r.panel, wxID_ANY, name, wxDefaultPosition, wxSize(130, -1));
+            r.name->Bind(wxEVT_TEXT, [this](wxCommandEvent&) { notify(); });
+        }
 
         auto* grid_panel = new wxPanel(r.panel, wxID_ANY);
         auto* grid_sizer = new wxGridSizer(m_n_rows, m_n_cols, 2, 2);
 
         auto tool_states = parse_tool_states(active_tools);
+        if (tool_states.empty())
+            tool_states[0] = 1; // default T0 → Primary when no assignment is stored
         r.all_tool_states = tool_states; // preserve all assignments, including off-screen tools
         wxPanel* this_panel = r.panel;
 
@@ -4617,17 +4649,21 @@ private:
                                  wxDefaultPosition, wxSize(220, 54), wxTE_MULTILINE);
         r.gcode->Bind(wxEVT_TEXT, [this](wxCommandEvent&) { notify(); });
 
-        auto* rm = new wxButton(r.panel, wxID_ANY, wxT("\u00d7"),
-                                wxDefaultPosition, wxSize(24, 24), wxBU_EXACTFIT);
-        rm->Bind(wxEVT_BUTTON, [this, this_panel](wxCommandEvent&) {
-            remove_row(this_panel);
-            notify();
-        });
-
-        sizer->Add(r.name,    0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        if (!is_primary) {
+            sizer->Add(r.name, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        }
         sizer->Add(grid_panel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
         sizer->Add(r.gcode,   1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
-        sizer->Add(rm,        0, wxALIGN_CENTER_VERTICAL);
+
+        if (!is_primary) {
+            auto* rm = new wxButton(r.panel, wxID_ANY, wxT("\u00d7"),
+                                    wxDefaultPosition, wxSize(24, 24), wxBU_EXACTFIT);
+            rm->Bind(wxEVT_BUTTON, [this, this_panel](wxCommandEvent&) {
+                remove_row(this_panel);
+                notify();
+            });
+            sizer->Add(rm, 0, wxALIGN_CENTER_VERTICAL);
+        }
         r.panel->SetSizer(sizer);
 
         m_rows_sizer->Add(r.panel, 0, wxEXPAND | wxBOTTOM, 4);
@@ -4638,6 +4674,7 @@ private:
     void remove_row(wxPanel* panel) {
         for (size_t i = 0; i < m_rows.size(); ++i) {
             if (m_rows[i].panel == panel) {
+                if (m_rows[i].is_primary) return; // primary row is non-deletable
                 m_rows_sizer->Detach(panel);
                 m_rows.erase(m_rows.begin() + i);
                 Layout();
@@ -5734,13 +5771,14 @@ void TabPrinter::toggle_options()
 
         // IDEX/IQEX: show carriage config options only when is_imex is enabled
         bool is_imex = m_config->opt_bool("is_imex");
-        for (auto el : {"imex_gantry_count", "imex_tools_per_gantry", "imex_tool_layout",
+        for (auto el : {"imex_gantry_count", "imex_tools_per_gantry",
                         "imex_nozzle_clearance_x", "imex_nozzle_clearance_y",
-                        "imex_carriage_margin", "imex_viz_theme"})
+                        "imex_carriage_margin"})
             toggle_option(el, is_imex);
-        if (m_imex_layout_combo) m_imex_layout_combo->Show(is_imex);
-        if (m_imex_theme_combo)  m_imex_theme_combo->Show(is_imex);
-        if (m_imex_modes_ctrl)   m_imex_modes_ctrl->Show(is_imex);
+        // These lines have custom combo widgets — toggle_line hides the full row
+        toggle_line("imex_tool_layout", is_imex);
+        toggle_line("imex_viz_theme",   is_imex);
+        if (m_imex_modes_ctrl) m_imex_modes_ctrl->Show(is_imex);
     }
     wxString extruder_number;
     long val = 1;

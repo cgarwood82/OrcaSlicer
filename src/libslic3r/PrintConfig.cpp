@@ -5506,7 +5506,7 @@ void PrintConfigDef::init_fff_params()
     def->label = L("Tools per Gantry");
     def->tooltip = L("Number of independent toolheads per gantry along X. 2 for IDEX-style.");
     def->min = 1;
-    def->max = 2;
+    def->max = 4;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(2));
 

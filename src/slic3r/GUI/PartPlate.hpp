@@ -191,6 +191,7 @@ private:
     void ensure_imex_zones();
     std::string build_imex_cache_key() const;
     void render_imex_zones(bool force_default_color);
+    void refresh_imex_icon();
     void calc_vertex_for_number(int index, bool one_number, GLModel &buffer);
     void calc_vertex_for_plate_name_edit_icon(GLTexture *texture, int index, PickingModel &model);
     void calc_vertex_for_icons(int index, PickingModel &model);
@@ -952,6 +953,8 @@ public:
     void load_cali_textures();
 
     void on_extruder_count_changed(int extruder_count);
+    // Re-position the IMEX mode icon on all plates without a full shape rebuild.
+    void refresh_imex_icons();
 
     void set_filament_count(int filament_count);
     void on_filament_deleted(int filament_count, int filament_id);
