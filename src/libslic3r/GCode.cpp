@@ -3036,6 +3036,40 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     this->placeholder_parser().set("print_time_sec", new ConfigOptionString(GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Print_Time_Sec_Placeholder)));
     this->placeholder_parser().set("used_filament_length", new ConfigOptionString(GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Used_Filament_Length_Placeholder)));
 
+    // IDEX/IQEX: set {imex_mode}, {imex_mode_index}, {imex_mode_gcode} placeholders before
+    // any G-code script is processed so they are available in machine_start_gcode,
+    // filament_start_gcode, filament_end_gcode, change_filament_gcode, etc.
+    // {imex_mode_names} and {imex_mode_gcodes} array placeholders are already accessible
+    // via the printer config (e.g. {imex_mode_names[0]}, {imex_mode_gcodes[1]}).
+    std::string imex_active_mode;
+    int         imex_active_mode_index = 0;
+    std::string imex_active_mode_gcode;
+    if (print.config().is_imex.value && !print.objects().empty()) {
+        const std::string& raw = print.objects().front()->config().imex_parallel_mode.value;
+        imex_active_mode = raw.empty() ? "primary" : raw;
+        const auto& mode_names  = print.config().imex_mode_names.values;
+        const auto& mode_gcodes = print.config().imex_mode_gcodes.values;
+        for (size_t i = 0; i < mode_names.size(); ++i) {
+            if (mode_names[i] == imex_active_mode) {
+                imex_active_mode_index = (int)i;
+                if (i < mode_gcodes.size())
+                    imex_active_mode_gcode = mode_gcodes[i];
+                break;
+            }
+        }
+    }
+    this->placeholder_parser().set("imex_mode",       imex_active_mode);
+    this->placeholder_parser().set("imex_mode_index", imex_active_mode_index);
+    this->placeholder_parser().set("imex_mode_gcode", imex_active_mode_gcode);
+
+    // IDEX/IQEX: process mode G-code BEFORE machine_start_gcode so that any
+    // {global abc = 1} declarations in the mode script are visible to machine_start_gcode.
+    // The processed result is buffered here and written to the file after temp setup below.
+    std::string imex_processed_gcode;
+    if (!imex_active_mode_gcode.empty())
+        imex_processed_gcode = this->placeholder_parser_process(
+            "imex_mode_gcode", imex_active_mode_gcode, initial_extruder_id);
+
     std::string machine_start_gcode = this->placeholder_parser_process("machine_start_gcode", print.config().machine_start_gcode.value, initial_extruder_id);
     if (print.config().gcode_flavor != gcfKlipper) {
         // Set bed temperature if the start G-code does not contain any bed temp control G-codes.
@@ -3054,23 +3088,9 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
             file.write(m_writer.set_chamber_temperature(max_chamber_temp, true)); // set chamber_temperature
     }
 
-    // IDEX/IQEX: inject mode G-code before machine_start_gcode so the carriage mode
-    // macro is active before any motion, homing, or probing in start G-code.
-    if (print.config().is_imex.value && !print.objects().empty()) {
-        const std::string& imex_mode = print.objects().front()->config().imex_parallel_mode.value;
-        if (!imex_mode.empty()) {
-            const auto& mode_names  = print.config().imex_mode_names.values;
-            const auto& mode_gcodes = print.config().imex_mode_gcodes.values;
-            for (size_t i = 0; i < mode_names.size() && i < mode_gcodes.size(); ++i) {
-                if (mode_names[i] == imex_mode && !mode_gcodes[i].empty()) {
-                    std::string imex_gcode = this->placeholder_parser_process(
-                        "imex_mode_gcode", mode_gcodes[i], initial_extruder_id);
-                    file.writeln(imex_gcode);
-                    break;
-                }
-            }
-        }
-    }
+    // Write IMEX mode G-code first (processed above), then machine_start_gcode.
+    if (!imex_processed_gcode.empty())
+        file.writeln(imex_processed_gcode);
 
     // Write the custom start G-code
     file.writeln(machine_start_gcode);

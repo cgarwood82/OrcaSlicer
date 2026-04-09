@@ -10509,6 +10509,18 @@ OtherSlicingStatesConfigDef::OtherSlicingStatesConfigDef()
 
     new_def("initial_no_support_extruder", coInt, "Initial no support extruder", "Zero-based index of the first extruder used for printing without support. Same as initial_no_support_tool.");
     new_def("in_head_wrap_detect_zone", coBool, "In head wrap detect zone", "Indicates if the first layer overlaps with the head wrap zone.");
+
+    def = this->add("imex_mode", coString);
+    def->label   = L("iMEX active mode");
+    def->tooltip = L("Name of the active iMEX parallel print mode for this plate (e.g. 'primary', 'mirror', 'copy'). Empty string if iMEX is not enabled.");
+
+    def = this->add("imex_mode_index", coInt);
+    def->label   = L("iMEX active mode index");
+    def->tooltip = L("Zero-based index of the active iMEX parallel print mode within imex_mode_names.");
+
+    def = this->add("imex_mode_gcode", coString);
+    def->label   = L("iMEX active mode G-code");
+    def->tooltip = L("The raw mode G-code template for the active iMEX parallel print mode, after placeholder evaluation. Globals defined here flow into machine_start_gcode.");
 }
 
 PrintStatisticsConfigDef::PrintStatisticsConfigDef()
