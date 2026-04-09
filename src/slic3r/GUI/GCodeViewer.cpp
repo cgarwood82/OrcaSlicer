@@ -913,8 +913,8 @@ void GCodeViewer::SequentialView::render(const bool has_render_path, float legen
         // marker.set_world_offset(current_offset);
         marker.render(canvas_width, canvas_height, view_type);
         marker.render_position_window(viewer, canvas_width, canvas_height, view_type);
-        // iXex secondary carriage markers
-        for (auto& sec : m_ixex_secondary_markers)
+        // IDEX/IQEX secondary carriage markers
+        for (auto& sec : m_imex_secondary_markers)
             sec.render(canvas_width, canvas_height, view_type);
     }
 
@@ -1511,7 +1511,7 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
     m_sequential_view.marker.set_world_position(libvgcode::convert(curr_vertex.position));
     m_sequential_view.marker.set_z_offset(m_z_offset + 0.5f);
 
-    // iXex: compute all carriage positions; update secondary nozzle markers;
+    // IDEX/IQEX: compute all carriage positions; update secondary nozzle markers;
     // carriage_box_draws is populated for toolhead footprint rendering after sequential_view.render().
     // Okabe-Ito colorblind-safe palette — excludes orange (#E69F00) and sky blue (#56B4E9)
     // which are used by the bed zone fills, ensuring the markers contrast against the background.
@@ -1523,41 +1523,41 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
     }};
     struct CarriageDraw { Vec3f pos; ColorRGBA color; float box_offset_x = 0.0f; float box_offset_y = 0.0f; };
     std::vector<CarriageDraw> carriage_box_draws;
-    float ixex_box_wx = 0.0f, ixex_box_wy = 0.0f;
+    float imex_box_wx = 0.0f, imex_box_wy = 0.0f;
     {
         PresetBundle* preset_bundle = wxGetApp().preset_bundle;
-        bool ixex_active = false;
+        bool imex_active = false;
         if (preset_bundle && m_sequential_view.m_show_marker) {
             const DynamicPrintConfig& printer_cfg = preset_bundle->printers.get_edited_preset().config;
-            auto* is_ixex_opt = printer_cfg.opt<ConfigOptionBool>("is_ixex");
-            if (is_ixex_opt && is_ixex_opt->value) {
+            auto* is_imex_opt = printer_cfg.opt<ConfigOptionBool>("is_imex");
+            if (is_imex_opt && is_imex_opt->value) {
                 const DynamicPrintConfig& process_cfg = preset_bundle->prints.get_edited_preset().config;
-                auto* mode_opt = process_cfg.opt<ConfigOptionString>("ixex_parallel_mode");
+                auto* mode_opt = process_cfg.opt<ConfigOptionString>("imex_parallel_mode");
                 std::string mode = mode_opt ? mode_opt->value : "primary";
                 // Per-plate mode overrides the process preset.
                 if (auto* plate = wxGetApp().plater()->get_partplate_list().get_curr_plate()) {
-                    std::string plate_mode = plate->get_ixex_mode();
+                    std::string plate_mode = plate->get_imex_mode();
                     if (plate_mode != "primary")
                         mode = plate_mode;
                 }
 
-                if (mode != m_ixex_last_mode) {
-                    m_sequential_view.m_ixex_secondary_markers.clear();
-                    m_ixex_last_mode = mode;
+                if (mode != m_imex_last_mode) {
+                    m_sequential_view.m_imex_secondary_markers.clear();
+                    m_imex_last_mode = mode;
                 }
 
                 if (!mode.empty() && mode != "primary") {
-                    auto* mode_names_opt   = printer_cfg.opt<ConfigOptionStrings>("ixex_mode_names");
-                    auto* active_tools_opt = printer_cfg.opt<ConfigOptionStrings>("ixex_mode_active_tools");
+                    auto* mode_names_opt   = printer_cfg.opt<ConfigOptionStrings>("imex_mode_names");
+                    auto* active_tools_opt = printer_cfg.opt<ConfigOptionStrings>("imex_mode_active_tools");
 
-                    auto* tpg_opt = printer_cfg.opt<ConfigOptionInt>("ixex_tools_per_gantry");
-                    auto* wx_opt  = printer_cfg.opt<ConfigOptionFloat>("ixex_nozzle_clearance_x");
-                    auto* wy_opt  = printer_cfg.opt<ConfigOptionFloat>("ixex_nozzle_clearance_y");
+                    auto* tpg_opt = printer_cfg.opt<ConfigOptionInt>("imex_tools_per_gantry");
+                    auto* wx_opt  = printer_cfg.opt<ConfigOptionFloat>("imex_nozzle_clearance_x");
+                    auto* wy_opt  = printer_cfg.opt<ConfigOptionFloat>("imex_nozzle_clearance_y");
                     int tools_per_gantry = tpg_opt ? std::max(1, tpg_opt->value) : 1;
-                    ixex_box_wx = wx_opt ? (float)wx_opt->value : 30.0f;
-                    ixex_box_wy = wy_opt ? (float)wy_opt->value : 30.0f;
+                    imex_box_wx = wx_opt ? (float)wx_opt->value : 30.0f;
+                    imex_box_wy = wy_opt ? (float)wy_opt->value : 30.0f;
 
-                    // Parse "idx:P/C/M" format — matches PartPlate::calc_ixex_zones() exactly.
+                    // Parse "idx:P/C/M" format — matches PartPlate::calc_imex_zones() exactly.
                     // Primary = state 1 (P), Copy = 2 (C), Mirror = 3 (M).
                     // Inactive tools (state 0) are not included in the stored string.
                     int pri_tool = -1;
@@ -1594,21 +1594,21 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
                     int sec_count = (int)sec_tool_ids.size();
 
                     if (sec_count > 0) {
-                        ixex_active = true;
+                        imex_active = true;
 
                         // Lazy init secondary nozzle markers
-                        if ((int)m_sequential_view.m_ixex_secondary_markers.size() != sec_count) {
-                            m_sequential_view.m_ixex_secondary_markers.resize(sec_count);
+                        if ((int)m_sequential_view.m_imex_secondary_markers.size() != sec_count) {
+                            m_sequential_view.m_imex_secondary_markers.resize(sec_count);
                             for (int i = 0; i < sec_count; ++i) {
-                                m_sequential_view.m_ixex_secondary_markers[i].init(m_marker_filename);
-                                m_sequential_view.m_ixex_secondary_markers[i].set_color(
+                                m_sequential_view.m_imex_secondary_markers[i].init(m_marker_filename);
+                                m_sequential_view.m_imex_secondary_markers[i].set_color(
                                     s_carriage_colors[(i + 1) % s_carriage_colors.size()]);
                             }
                         }
 
                         // Bed X and Y bounds — read from the current plate's shape, which is
                         // in world/GL coordinates (same space as curr_vertex.position), and is
-                        // the exact same source used by PartPlate::calc_ixex_zones().
+                        // the exact same source used by PartPlate::calc_imex_zones().
                         float bed_x_min, bed_x_max, bed_y_min, bed_y_max;
                         {
                             PartPlate* curr_plate = wxGetApp().plater()->get_partplate_list().get_curr_plate();
@@ -1633,12 +1633,12 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
                             }
                         }
 
-                        auto* gc_opt = printer_cfg.opt<ConfigOptionInt>("ixex_gantry_count");
+                        auto* gc_opt = printer_cfg.opt<ConfigOptionInt>("imex_gantry_count");
                         int gantry_count = gc_opt ? std::max(1, gc_opt->value) : 1;
 
-                        // Apply the same flip logic as PartPlate::calc_ixex_zones() so physical
+                        // Apply the same flip logic as PartPlate::calc_imex_zones() so physical
                         // grid positions match the bed zone visualization.
-                        auto* layout_opt = printer_cfg.opt<ConfigOptionString>("ixex_tool_layout");
+                        auto* layout_opt = printer_cfg.opt<ConfigOptionString>("imex_tool_layout");
                         const std::string layout_str = layout_opt ? layout_opt->value : "front-left";
                         const bool flip_x = (layout_str == "front-right" || layout_str == "rear-right");
                         const bool flip_y = (layout_str == "rear-left"   || layout_str == "rear-right");
@@ -1673,15 +1673,15 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
 
                         // Primary carriage box: nozzle sits at the collision-side edge.
                         // Default to centered; override once we know which side the secondaries are on.
-                        float pri_box_offset_x = (pri_phys_col == 0) ? 0.0f : -ixex_box_wx; // nozzle at inner edge (facing center of bed)
-                        float pri_box_offset_y = -ixex_box_wy;        // nozzle at high-Y edge by default (gantry always behind nozzle); override if secondary is behind
+                        float pri_box_offset_x = (pri_phys_col == 0) ? 0.0f : -imex_box_wx; // nozzle at inner edge (facing center of bed)
+                        float pri_box_offset_y = -imex_box_wy;        // nozzle at high-Y edge by default (gantry always behind nozzle); override if secondary is behind
                         for (int i = 0; i < sec_count; ++i) {
                             int sc = phys_col_of(sec_tool_ids[i]);
                             int sr = phys_row_of(sec_tool_ids[i]);
                             if      (sc > pri_phys_col) { pri_box_offset_x = 0.0f;          }
-                            else if (sc < pri_phys_col) { pri_box_offset_x = -ixex_box_wx;  }
+                            else if (sc < pri_phys_col) { pri_box_offset_x = -imex_box_wx;  }
                             if      (sr > pri_phys_row) { pri_box_offset_y = 0.0f;          }
-                            else if (sr < pri_phys_row) { pri_box_offset_y = -ixex_box_wy;  }
+                            else if (sr < pri_phys_row) { pri_box_offset_y = -imex_box_wy;  }
                         }
                         carriage_box_draws.push_back({ prim_pos, s_carriage_colors[0], pri_box_offset_x, pri_box_offset_y });
 
@@ -1719,8 +1719,8 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
                             }
 
                             Vec3f sec_pos{ sec_x, sec_y, prim_pos.z() };
-                            m_sequential_view.m_ixex_secondary_markers[i].set_world_position(sec_pos);
-                            m_sequential_view.m_ixex_secondary_markers[i].set_z_offset(m_z_offset + 0.5f);
+                            m_sequential_view.m_imex_secondary_markers[i].set_world_position(sec_pos);
+                            m_sequential_view.m_imex_secondary_markers[i].set_z_offset(m_z_offset + 0.5f);
                             // X: copy tools move in sync with primary so they share the same
                             // X-facing orientation. Mirror tools approach from the opposite side
                             // so the nozzle sits at the collision-side edge.
@@ -1728,16 +1728,16 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
                             if (sec_state == 2) {
                                 sec_box_offset_x = pri_box_offset_x;
                             } else {
-                                if      (sec_phys_col > pri_phys_col) sec_box_offset_x = -ixex_box_wx;
+                                if      (sec_phys_col > pri_phys_col) sec_box_offset_x = -imex_box_wx;
                                 else if (sec_phys_col < pri_phys_col) sec_box_offset_x = 0.0f;
                                 else                                  sec_box_offset_x = pri_box_offset_x;
                             }
                             // Y: always row-based — gantry is always behind nozzle regardless of
                             // copy/mirror (a back-row copy still has its gantry at the back).
                             float sec_box_offset_y;
-                            if      (sec_phys_row > pri_phys_row) sec_box_offset_y = -ixex_box_wy;
+                            if      (sec_phys_row > pri_phys_row) sec_box_offset_y = -imex_box_wy;
                             else if (sec_phys_row < pri_phys_row) sec_box_offset_y = 0.0f;
-                            else                                  sec_box_offset_y = -ixex_box_wy;
+                            else                                  sec_box_offset_y = -imex_box_wy;
                             carriage_box_draws.push_back({
                                 sec_pos, s_carriage_colors[(i + 1) % s_carriage_colors.size()],
                                 sec_box_offset_x, sec_box_offset_y });
@@ -1746,28 +1746,28 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
                 }
             }
         }
-        if (!ixex_active)
-            m_sequential_view.m_ixex_secondary_markers.clear();
+        if (!imex_active)
+            m_sequential_view.m_imex_secondary_markers.clear();
     }
 
     // BBS fixed buttom margin. m_moves_slider.pos_y
     m_sequential_view.render(!m_no_render_path, legend_height, &m_viewer, m_viewer.get_current_vertex().gcode_id, canvas_width, canvas_height - bottom_margin * m_scale, right_margin * m_scale, m_viewer.get_view_type());
 
-    // iXex: render toolhead footprint boxes for each active carriage.
-    // Each box is ixex_nozzle_clearance_x × ixex_nozzle_clearance_y, sitting above the nozzle tip.
-    if (!carriage_box_draws.empty() && ixex_box_wx > 0.0f && ixex_box_wy > 0.0f) {
+    // IDEX/IQEX: render toolhead footprint boxes for each active carriage.
+    // Each box is imex_nozzle_clearance_x × imex_nozzle_clearance_y, sitting above the nozzle tip.
+    if (!carriage_box_draws.empty() && imex_box_wx > 0.0f && imex_box_wy > 0.0f) {
         // Rebuild box mesh every frame — dimensions can change via config edit without a
         // G-code reload, so dimension-based caching isn't safe.
         // Mesh origin: nozzle at x=0, centered in Y, Z starts at nozzle tip level.
         // Per-carriage box_offset_x shifts the mesh left or right so the nozzle lands
         // at the correct (collision-side) edge.
         {
-            const float box_h = std::max(ixex_box_wx, ixex_box_wy);
-            indexed_triangle_set its = its_make_cube((double)ixex_box_wx, (double)ixex_box_wy, (double)box_h);
+            const float box_h = std::max(imex_box_wx, imex_box_wy);
+            indexed_triangle_set its = its_make_cube((double)imex_box_wx, (double)imex_box_wy, (double)box_h);
             // No vertex pre-shifting — box_offset_x/y in the per-carriage transform
             // positions the nozzle at the correct collision-side edge.
-            m_ixex_toolhead_box.reset();
-            m_ixex_toolhead_box.init_from(its);
+            m_imex_toolhead_box.reset();
+            m_imex_toolhead_box.init_from(its);
         }
 
         GLShaderProgram* shader = wxGetApp().get_shader("gouraud_light");
@@ -1787,8 +1787,8 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
                     view_matrix.matrix().block(0, 0, 3, 3) *
                     model_matrix.matrix().block(0, 0, 3, 3).inverse().transpose();
                 shader->set_uniform("view_normal_matrix", view_normal_matrix);
-                m_ixex_toolhead_box.set_color(draw.color);
-                m_ixex_toolhead_box.render();
+                m_imex_toolhead_box.set_color(draw.color);
+                m_imex_toolhead_box.render();
             }
             shader->stop_using();
             glsafe(::glDisable(GL_BLEND));

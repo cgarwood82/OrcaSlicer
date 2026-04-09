@@ -1035,8 +1035,8 @@ PRINT_CONFIG_CLASS_DEFINE(
     // Orca: internal use only
     ((ConfigOptionBool,  calib_flowrate_topinfill_special_order)) // ORCA: special flag for flow rate calibration
 
-    // iXex parallel print mode (per-print selection, stores mode name or "primary")
-    ((ConfigOptionString,              ixex_parallel_mode))
+    // IDEX/IQEX parallel print mode (per-print selection, stores mode name or "primary")
+    ((ConfigOptionString,              imex_parallel_mode))
 )
 
 // This object is mapped to Perl as Slic3r::Config::PrintRegion.
@@ -1334,15 +1334,15 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionStrings,             filament_start_gcode))
     ((ConfigOptionBool,                single_extruder_multi_material))
     ((ConfigOptionBool,                manual_filament_change))
-    // iXex (independent X extruder) — parallel printing support for IDEX/IQEX printers
-    ((ConfigOptionBool,                is_ixex))
-    ((ConfigOptionInt,                 ixex_gantry_count))
-    ((ConfigOptionInt,                 ixex_tools_per_gantry))
-    ((ConfigOptionFloat,               ixex_nozzle_clearance_x))
-    ((ConfigOptionFloat,               ixex_nozzle_clearance_y))
-    ((ConfigOptionStrings,             ixex_mode_names))
-    ((ConfigOptionStrings,             ixex_mode_active_tools))
-    ((ConfigOptionStrings,             ixex_mode_gcodes))
+    // IDEX/IQEX (independent X extruder) — parallel printing support for IDEX/IQEX printers
+    ((ConfigOptionBool,                is_imex))
+    ((ConfigOptionInt,                 imex_gantry_count))
+    ((ConfigOptionInt,                 imex_tools_per_gantry))
+    ((ConfigOptionFloat,               imex_nozzle_clearance_x))
+    ((ConfigOptionFloat,               imex_nozzle_clearance_y))
+    ((ConfigOptionStrings,             imex_mode_names))
+    ((ConfigOptionStrings,             imex_mode_active_tools))
+    ((ConfigOptionStrings,             imex_mode_gcodes))
     ((ConfigOptionBool,                single_extruder_multi_material_priming))
     ((ConfigOptionBool,                wipe_tower_no_sparse_layers))
     ((ConfigOptionString,              change_filament_gcode))

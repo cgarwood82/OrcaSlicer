@@ -589,7 +589,7 @@ public:
     void				set_custom_gcode(const t_config_option_key& opt_key, const std::string& value) override;
 };
 
-class IXexModesCtrl;
+class IMEXModesCtrl;
 
 class TabPrinter : public Tab
 {
@@ -605,9 +605,9 @@ private:
     std::vector<PageShp>			m_pages_sla;
 
     wxBoxSizer*         m_presets_sizer                 {nullptr};
-    IXexModesCtrl*      m_ixex_modes_ctrl               {nullptr};
-    ComboBox*           m_ixex_layout_combo             {nullptr};
-    ComboBox*           m_ixex_theme_combo              {nullptr};
+    IMEXModesCtrl*      m_imex_modes_ctrl               {nullptr};
+    ComboBox*           m_imex_layout_combo             {nullptr};
+    ComboBox*           m_imex_theme_combo              {nullptr};
 public:
 	ScalableButton*	m_reset_to_filament_color = nullptr;
 

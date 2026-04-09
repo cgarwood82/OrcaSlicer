@@ -136,14 +136,14 @@ private:
     GLModel m_logo_triangles;
     GLModel m_gridlines;
     GLModel m_gridlines_bolder;
-    std::vector<GLModel> m_ixex_copy_zones;        // blue tint (Wong #56B4E9)
-    std::vector<GLModel> m_ixex_mirror_zones;      // orange tint (Wong #E69F00)
-    std::vector<BoundingBoxf3> m_ixex_secondary_zone_boxes; // secondary (copy/mirror) zone rects — objects blocked here
-    std::vector<BoundingBoxf3> m_ixex_collision_zones;      // carriage danger strips inside primary zone (mm)
-    std::vector<GLModel>       m_ixex_collision_overlay;    // red-orange rendered fill for danger strips
-    std::vector<GLModel>       m_ixex_margin_overlay;       // amber advisory bands just inside collision strips
-    std::optional<BoundingBoxf> m_ixex_primary_zone_box;   // primary zone extents in mm; empty when iXex is off/primary-only
-    std::string m_ixex_zones_mode_cache{ "\x01" }; // cached mode+topology key; sentinel = unbuilt
+    std::vector<GLModel> m_imex_copy_zones;        // blue tint (Wong #56B4E9)
+    std::vector<GLModel> m_imex_mirror_zones;      // orange tint (Wong #E69F00)
+    std::vector<BoundingBoxf3> m_imex_secondary_zone_boxes; // secondary (copy/mirror) zone rects — objects blocked here
+    std::vector<BoundingBoxf3> m_imex_collision_zones;      // carriage danger strips inside primary zone (mm)
+    std::vector<GLModel>       m_imex_collision_overlay;    // red-orange rendered fill for danger strips
+    std::vector<GLModel>       m_imex_margin_overlay;       // amber advisory bands just inside collision strips
+    std::optional<BoundingBoxf> m_imex_primary_zone_box;   // primary zone extents in mm; empty when IDEX/IQEX is off/primary-only
+    std::string m_imex_zones_mode_cache{ "\x01" }; // cached mode+topology key; sentinel = unbuilt
     GLModel m_height_limit_common;
     GLModel m_height_limit_bottom;
     GLModel m_height_limit_top;
@@ -155,7 +155,7 @@ private:
     PickingModel m_plate_filament_map_icon;
     PickingModel m_plate_name_edit_icon;
     PickingModel m_move_front_icon;
-    PickingModel m_ixex_mode_icon;
+    PickingModel m_imex_mode_icon;
     GLModel m_plate_idx_icon;
     GLTexture m_texture;
 
@@ -187,10 +187,10 @@ private:
     void calc_triangles_from_polygon(const ExPolygon &poly, GLModel& render_model);
     void calc_gridlines(const ExPolygon& poly, const BoundingBox& pp_bbox);
     void calc_height_limit();
-    void calc_ixex_zones();
-    void ensure_ixex_zones();
-    std::string build_ixex_cache_key() const;
-    void render_ixex_zones(bool force_default_color);
+    void calc_imex_zones();
+    void ensure_imex_zones();
+    std::string build_imex_cache_key() const;
+    void render_imex_zones(bool force_default_color);
     void calc_vertex_for_number(int index, bool one_number, GLModel &buffer);
     void calc_vertex_for_plate_name_edit_icon(GLTexture *texture, int index, PickingModel &model);
     void calc_vertex_for_icons(int index, PickingModel &model);
@@ -222,7 +222,7 @@ private:
 public:
     static constexpr unsigned int PLATE_NAME_HOVER_ID = 6;
     static constexpr unsigned int PLATE_FILAMENT_MAP_ID = 8;
-    static constexpr unsigned int PLATE_IXEX_MODE_ID = 9;
+    static constexpr unsigned int PLATE_IMEX_MODE_ID = 9;
     static constexpr unsigned int GRABBER_COUNT = 10;
 
     static ColorRGBA SELECT_COLOR;
@@ -283,9 +283,9 @@ public:
     bool get_spiral_vase_mode() const;
     void set_spiral_vase_mode(bool spiral_mode, bool as_global);
 
-    std::string get_ixex_mode() const;
-    void        set_ixex_mode(const std::string& mode);
-    void        reset_ixex_mode();
+    std::string get_imex_mode() const;
+    void        set_imex_mode(const std::string& mode);
+    void        reset_imex_mode();
 
     std::vector<Vec2d> get_plate_wrapping_detection_area() const;
 
@@ -451,14 +451,14 @@ public:
     {
         return m_ready_for_slice && !m_apply_invalid;
     }
-    // Returns true if any instance on this plate overlaps an iXex secondary or collision zone.
-    bool has_ixex_placement_violations();
-    // Returns the primary-zone bounding box in mm when an iXex parallel mode is active.
-    // Empty (nullopt) when iXex is off or the mode is "primary" (full-bed).
-    std::optional<BoundingBoxf> ixex_primary_zone() { ensure_ixex_zones(); return m_ixex_primary_zone_box; }
-    // Returns carriage collision strips (mm) for the current iXex mode.
-    // Always call ixex_primary_zone() first to ensure the cache is warm.
-    const std::vector<BoundingBoxf3>& ixex_collision_zones() const { return m_ixex_collision_zones; }
+    // Returns true if any instance on this plate overlaps an IDEX/IQEX secondary or collision zone.
+    bool has_imex_placement_violations();
+    // Returns the primary-zone bounding box in mm when an IDEX/IQEX parallel mode is active.
+    // Empty (nullopt) when IDEX/IQEX is off or the mode is "primary" (full-bed).
+    std::optional<BoundingBoxf> imex_primary_zone() { ensure_imex_zones(); return m_imex_primary_zone_box; }
+    // Returns carriage collision strips (mm) for the current IDEX/IQEX mode.
+    // Always call imex_primary_zone() first to ensure the cache is warm.
+    const std::vector<BoundingBoxf3>& imex_collision_zones() const { return m_imex_collision_zones; }
     void update_slice_ready_status(bool ready_slice)
     {
         m_ready_for_slice = ready_slice;
@@ -634,8 +634,8 @@ class PartPlateList : public ObjectBase
     GLTexture m_plate_set_filament_map_hovered_texture;
     GLTexture m_plate_name_edit_texture;
     GLTexture m_plate_name_edit_hovered_texture;
-    GLTexture m_ixex_mode_texture;
-    GLTexture m_ixex_mode_hovered_texture;
+    GLTexture m_imex_mode_texture;
+    GLTexture m_imex_mode_hovered_texture;
     GLTexture m_idx_textures[MAX_PLATE_COUNT];
     // set render option
     bool render_bedtype_logo = true;

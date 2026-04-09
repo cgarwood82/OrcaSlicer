@@ -7722,13 +7722,13 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
         q->post_process_string_object_exception(err);
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": validate err=%1%, warning=%2%")%err.string%warning.string;
 
-        // iXex placement check: if objects overlap secondary zones, treat it as a
+        // IDEX/IQEX placement check: if objects overlap secondary zones, treat it as a
         // validation error so the standard pathway handles button state, notifications,
         // and auto-slice blocking consistently.
         if (err.string.empty()) {
-            PartPlate* ixex_plate = partplate_list.get_curr_plate();
-            if (ixex_plate && ixex_plate->has_ixex_placement_violations())
-                err.string = _u8L("Cannot slice: objects are in secondary zones reserved for iXex parallel printing.");
+            PartPlate* imex_plate = partplate_list.get_curr_plate();
+            if (imex_plate && imex_plate->has_imex_placement_violations())
+                err.string = _u8L("Cannot slice: objects are in secondary zones reserved for IDEX/IQEX parallel printing.");
         }
 
         if (err.string.empty()) {
@@ -17640,7 +17640,7 @@ int Plater::select_plate_by_hover_id(int hover_id, bool right_click, bool isModi
         update();
         p->partplate_list.select_plate(0);
     }
-    else if (action == (int)PartPlate::PLATE_IXEX_MODE_ID)
+    else if (action == (int)PartPlate::PLATE_IMEX_MODE_ID)
     {
         ret = select_plate(plate_index);
         if (!ret) {
@@ -17649,7 +17649,7 @@ int Plater::select_plate_by_hover_id(int hover_id, bool right_click, bool isModi
             std::vector<std::string> modes;
             modes.push_back("primary");
             const DynamicPrintConfig& printer_cfg = wxGetApp().preset_bundle->printers.get_edited_preset().config;
-            auto* names_opt = printer_cfg.option<ConfigOptionStrings>("ixex_mode_names");
+            auto* names_opt = printer_cfg.option<ConfigOptionStrings>("imex_mode_names");
             if (names_opt) {
                 for (const auto& n : names_opt->values)
                     if (!n.empty()) modes.push_back(n);
@@ -17658,7 +17658,7 @@ int Plater::select_plate_by_hover_id(int hover_id, bool right_click, bool isModi
             if (right_click) {
                 // Show a popup menu with all modes.
                 wxMenu menu;
-                std::string current = curr_plate->get_ixex_mode();
+                std::string current = curr_plate->get_imex_mode();
                 for (size_t i = 0; i < modes.size(); ++i) {
                     wxMenuItem* item = menu.AppendRadioItem(wxID_HIGHEST + (int)i, from_u8(modes[i]));
                     if (modes[i] == current)
@@ -17667,8 +17667,8 @@ int Plater::select_plate_by_hover_id(int hover_id, bool right_click, bool isModi
                 menu.Bind(wxEVT_MENU, [this, curr_plate, &modes](wxCommandEvent& e) {
                     int idx = e.GetId() - wxID_HIGHEST;
                     if (idx >= 0 && idx < (int)modes.size()) {
-                        take_snapshot("set ixex mode");
-                        curr_plate->set_ixex_mode(modes[idx]);
+                        take_snapshot("set imex mode");
+                        curr_plate->set_imex_mode(modes[idx]);
                         update_project_dirty_from_presets();
                         set_plater_dirty(true);
                         update();
@@ -17678,13 +17678,13 @@ int Plater::select_plate_by_hover_id(int hover_id, bool right_click, bool isModi
                 ret = 1; // signal to caller: popup was shown, suppress plate context menu
             } else {
                 // Left-click: cycle to next mode.
-                std::string current = curr_plate->get_ixex_mode();
+                std::string current = curr_plate->get_imex_mode();
                 auto it = std::find(modes.begin(), modes.end(), current);
                 size_t next_idx = (it == modes.end()) ? 0 : ((it - modes.begin() + 1) % modes.size());
                 std::string next_mode = modes[next_idx];
                 if (next_mode != current) {
-                    take_snapshot("set ixex mode");
-                    curr_plate->set_ixex_mode(next_mode);
+                    take_snapshot("set imex mode");
+                    curr_plate->set_imex_mode(next_mode);
                     update_project_dirty_from_presets();
                     set_plater_dirty(true);
                     update();

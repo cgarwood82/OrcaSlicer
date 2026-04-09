@@ -540,13 +540,13 @@ void ArrangeJob::process(Ctl &ctl)
 
     Points      bedpts = get_shrink_bedpts(m_plater->config(),params);
 
-    // When an iXex parallel mode is active, constrain auto-arrange to the primary zone only
+    // When an IDEX/IQEX parallel mode is active, constrain auto-arrange to the primary zone only
     // and treat carriage collision strips as hard excluded regions.
-    // NOTE: m_ixex_primary_zone_box and ixex_collision_zones() are in global (world) coordinates
+    // NOTE: m_imex_primary_zone_box and imex_collision_zones() are in global (world) coordinates
     // because they are derived from m_shape which includes the plate origin offset.  The arranger
     // always works in plate-local space (origin = 0,0), so we subtract the plate origin here.
     if (PartPlate* curr_plate = partplate_list.get_curr_plate()) {
-        if (auto pz = curr_plate->ixex_primary_zone()) {
+        if (auto pz = curr_plate->imex_primary_zone()) {
             Vec3d plate_origin = curr_plate->get_origin();
             double ox = plate_origin.x(), oy = plate_origin.y();
             BoundingBoxf pz_local(Vec2d(pz->min.x() - ox, pz->min.y() - oy),
@@ -558,7 +558,7 @@ void ArrangeJob::process(Ctl &ctl)
                 { scaled_pz.max.x(), scaled_pz.max.y() },
                 { scaled_pz.min.x(), scaled_pz.max.y() },
             };
-            for (const BoundingBoxf3& cz : curr_plate->ixex_collision_zones()) {
+            for (const BoundingBoxf3& cz : curr_plate->imex_collision_zones()) {
                 Polygon poly({
                     { scaled(cz.min.x() - ox), scaled(cz.min.y() - oy) },
                     { scaled(cz.max.x() - ox), scaled(cz.min.y() - oy) },
@@ -572,7 +572,7 @@ void ArrangeJob::process(Ctl &ctl)
                 ap.is_virt_object = true;
                 ap.bed_idx       = current_plate_index;
                 ap.height        = 1;
-                ap.name          = "IXexCollisionZone";
+                ap.name          = "IMEXCollisionZone";
                 m_unselected.emplace_back(std::move(ap));
             }
         }

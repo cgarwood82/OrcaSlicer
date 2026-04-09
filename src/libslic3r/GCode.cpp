@@ -3054,18 +3054,18 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
             file.write(m_writer.set_chamber_temperature(max_chamber_temp, true)); // set chamber_temperature
     }
 
-    // iXex: inject mode G-code before machine_start_gcode so the carriage mode
+    // IDEX/IQEX: inject mode G-code before machine_start_gcode so the carriage mode
     // macro is active before any motion, homing, or probing in start G-code.
-    if (print.config().is_ixex.value && !print.objects().empty()) {
-        const std::string& ixex_mode = print.objects().front()->config().ixex_parallel_mode.value;
-        if (!ixex_mode.empty() && ixex_mode != "primary") {
-            const auto& mode_names  = print.config().ixex_mode_names.values;
-            const auto& mode_gcodes = print.config().ixex_mode_gcodes.values;
+    if (print.config().is_imex.value && !print.objects().empty()) {
+        const std::string& imex_mode = print.objects().front()->config().imex_parallel_mode.value;
+        if (!imex_mode.empty() && imex_mode != "primary") {
+            const auto& mode_names  = print.config().imex_mode_names.values;
+            const auto& mode_gcodes = print.config().imex_mode_gcodes.values;
             for (size_t i = 0; i < mode_names.size() && i < mode_gcodes.size(); ++i) {
-                if (mode_names[i] == ixex_mode && !mode_gcodes[i].empty()) {
-                    std::string ixex_gcode = this->placeholder_parser_process(
-                        "ixex_mode_gcode", mode_gcodes[i], initial_extruder_id);
-                    file.writeln(ixex_gcode);
+                if (mode_names[i] == imex_mode && !mode_gcodes[i].empty()) {
+                    std::string imex_gcode = this->placeholder_parser_process(
+                        "imex_mode_gcode", mode_gcodes[i], initial_extruder_id);
+                    file.writeln(imex_gcode);
                     break;
                 }
             }

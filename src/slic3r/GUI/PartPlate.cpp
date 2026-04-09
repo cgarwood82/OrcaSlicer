@@ -365,32 +365,32 @@ std::vector<Vec2d> PartPlate::get_plate_wrapping_detection_area() const
     return std::vector<Vec2d>();
 }
 
-std::string PartPlate::get_ixex_mode() const
+std::string PartPlate::get_imex_mode() const
 {
-    if (m_config.has("ixex_parallel_mode")) {
-        auto* opt = m_config.option<ConfigOptionString>("ixex_parallel_mode");
+    if (m_config.has("imex_parallel_mode")) {
+        auto* opt = m_config.option<ConfigOptionString>("imex_parallel_mode");
         if (opt && !opt->value.empty())
             return opt->value;
     }
     return "primary";
 }
 
-void PartPlate::set_ixex_mode(const std::string& mode)
+void PartPlate::set_imex_mode(const std::string& mode)
 {
     if (mode.empty() || mode == "primary") {
-        m_config.erase("ixex_parallel_mode");
+        m_config.erase("imex_parallel_mode");
     } else {
-        m_config.set_key_value("ixex_parallel_mode", new ConfigOptionString(mode));
+        m_config.set_key_value("imex_parallel_mode", new ConfigOptionString(mode));
     }
     update_slice_result_valid_state(false);
-    m_ixex_zones_mode_cache = "\x01"; // force zone rebuild
+    m_imex_zones_mode_cache = "\x01"; // force zone rebuild
 }
 
-void PartPlate::reset_ixex_mode()
+void PartPlate::reset_imex_mode()
 {
-    m_config.erase("ixex_parallel_mode");
+    m_config.erase("imex_parallel_mode");
     update_slice_result_valid_state(false);
-    m_ixex_zones_mode_cache = "\x01";
+    m_imex_zones_mode_cache = "\x01";
 }
 
 void PartPlate::set_spiral_vase_mode(bool spiral_mode, bool as_global)
@@ -484,30 +484,30 @@ void PartPlate::calc_exclude_triangles(const ExPolygon &poly)
 // Forward declaration (defined later in this file)
 static bool init_model_from_lines(GLModel &model, const Lines &lines, float z);
 
-void PartPlate::calc_ixex_zones()
+void PartPlate::calc_imex_zones()
 {
-    m_ixex_copy_zones.clear();
-    m_ixex_mirror_zones.clear();
+    m_imex_copy_zones.clear();
+    m_imex_mirror_zones.clear();
     // Clear blocking vectors at the top so early returns don't leave stale data.
-    m_ixex_secondary_zone_boxes.clear();
-    m_ixex_collision_zones.clear();
-    m_ixex_collision_overlay.clear();
-    m_ixex_margin_overlay.clear();
-    m_ixex_primary_zone_box = std::nullopt;
+    m_imex_secondary_zone_boxes.clear();
+    m_imex_collision_zones.clear();
+    m_imex_collision_overlay.clear();
+    m_imex_margin_overlay.clear();
+    m_imex_primary_zone_box = std::nullopt;
 
     if (!wxGetApp().preset_bundle)
         return;
 
     const DynamicPrintConfig& printer_cfg = wxGetApp().preset_bundle->printers.get_edited_preset().config;
-    auto* is_ixex_opt = printer_cfg.option<ConfigOptionBool>("is_ixex");
-    if (!is_ixex_opt || !is_ixex_opt->value)
+    auto* is_imex_opt = printer_cfg.option<ConfigOptionBool>("is_imex");
+    if (!is_imex_opt || !is_imex_opt->value)
         return;
 
     // Per-plate mode takes priority over the process preset.
-    std::string active_mode = get_ixex_mode();
+    std::string active_mode = get_imex_mode();
     if (active_mode == "primary") {
         const DynamicPrintConfig& process_cfg = wxGetApp().preset_bundle->prints.get_edited_preset().config;
-        auto* mode_opt = process_cfg.option<ConfigOptionString>("ixex_parallel_mode");
+        auto* mode_opt = process_cfg.option<ConfigOptionString>("imex_parallel_mode");
         if (mode_opt && !mode_opt->value.empty())
             active_mode = mode_opt->value;
     }
@@ -515,9 +515,9 @@ void PartPlate::calc_ixex_zones()
         return;
 
     // Grid dimensions and tool layout from printer config
-    auto* gantry_opt  = printer_cfg.option<ConfigOptionInt>("ixex_gantry_count");
-    auto* tpg_opt     = printer_cfg.option<ConfigOptionInt>("ixex_tools_per_gantry");
-    auto* layout_opt  = printer_cfg.option<ConfigOptionString>("ixex_tool_layout");
+    auto* gantry_opt  = printer_cfg.option<ConfigOptionInt>("imex_gantry_count");
+    auto* tpg_opt     = printer_cfg.option<ConfigOptionInt>("imex_tools_per_gantry");
+    auto* layout_opt  = printer_cfg.option<ConfigOptionString>("imex_tool_layout");
 
     int n_cols  = tpg_opt    ? std::max(1, tpg_opt->value)    : 2;
     int n_rows  = gantry_opt ? std::max(1, gantry_opt->value) : 1;
@@ -541,8 +541,8 @@ void PartPlate::calc_ixex_zones()
         return; // nothing to dim with a single zone
 
     // Look up secondary tool indices (active in mode, but NOT the primary tool)
-    auto* names_opt  = printer_cfg.option<ConfigOptionStrings>("ixex_mode_names");
-    auto* tools_opt  = printer_cfg.option<ConfigOptionStrings>("ixex_mode_active_tools");
+    auto* names_opt  = printer_cfg.option<ConfigOptionStrings>("imex_mode_names");
+    auto* tools_opt  = printer_cfg.option<ConfigOptionStrings>("imex_mode_active_tools");
     std::string active_tools_str;
     if (names_opt && tools_opt) {
         for (size_t i = 0; i < names_opt->values.size(); ++i) {
@@ -668,18 +668,18 @@ void PartPlate::calc_ixex_zones()
         for (const auto& b : make_boxes(cells))
             push_zone_fill(vec, b.x0, b.x1, b.y0, b.y1);
     };
-    push_expanded_fills(m_ixex_copy_zones,   copy_cells);
-    push_expanded_fills(m_ixex_mirror_zones, mirror_cells);
+    push_expanded_fills(m_imex_copy_zones,   copy_cells);
+    push_expanded_fills(m_imex_mirror_zones, mirror_cells);
 
 
     // --- Secondary zone blocking ---
     // Collect the expanded bounding boxes for all secondary (copy+mirror) zones.
     // check_outside() uses these to prevent objects being placed outside the primary zone.
     for (const auto& b : make_boxes(copy_cells))
-        m_ixex_secondary_zone_boxes.push_back(
+        m_imex_secondary_zone_boxes.push_back(
             BoundingBoxf3(Vec3d(b.x0, b.y0, -1.0), Vec3d(b.x1, b.y1, 1e4)));
     for (const auto& b : make_boxes(mirror_cells))
-        m_ixex_secondary_zone_boxes.push_back(
+        m_imex_secondary_zone_boxes.push_back(
             BoundingBoxf3(Vec3d(b.x0, b.y0, -1.0), Vec3d(b.x1, b.y1, 1e4)));
 
     // --- Carriage collision danger strips ---
@@ -696,9 +696,9 @@ void PartPlate::calc_ixex_zones()
     //   !has_row_sep → full bed height;  has_row_sep → primary row only
     //   !has_col_sep → full bed width;   has_col_sep → primary column only
 
-    auto* cw_opt  = printer_cfg.option<ConfigOptionFloat>("ixex_nozzle_clearance_x");
-    auto* ch_opt  = printer_cfg.option<ConfigOptionFloat>("ixex_nozzle_clearance_y");
-    auto* mgn_opt = printer_cfg.option<ConfigOptionFloat>("ixex_carriage_margin");
+    auto* cw_opt  = printer_cfg.option<ConfigOptionFloat>("imex_nozzle_clearance_x");
+    auto* ch_opt  = printer_cfg.option<ConfigOptionFloat>("imex_nozzle_clearance_y");
+    auto* mgn_opt = printer_cfg.option<ConfigOptionFloat>("imex_carriage_margin");
     double carriage_w = cw_opt  ? cw_opt->value  : 0.0;
     double carriage_h = ch_opt  ? ch_opt->value  : 0.0;
     double margin     = mgn_opt ? mgn_opt->value : 0.0;
@@ -714,7 +714,7 @@ void PartPlate::calc_ixex_zones()
         if (!clipped.empty()) {
             GLModel m;
             if (init_model_from_poly(m, clipped.front(), GROUND_Z))
-                m_ixex_margin_overlay.push_back(std::move(m));
+                m_imex_margin_overlay.push_back(std::move(m));
         }
     };
 
@@ -723,14 +723,14 @@ void PartPlate::calc_ixex_zones()
     double pz_x1 = has_col_sep ? x_min + (pri_col + 1) * zone_w : x_max;
     double pz_y0 = has_row_sep ? y_min + pri_row        * zone_h : y_min;
     double pz_y1 = has_row_sep ? y_min + (pri_row + 1)  * zone_h : y_max;
-    m_ixex_primary_zone_box = BoundingBoxf(Vec2d(pz_x0, pz_y0), Vec2d(pz_x1, pz_y1));
+    m_imex_primary_zone_box = BoundingBoxf(Vec2d(pz_x0, pz_y0), Vec2d(pz_x1, pz_y1));
 
     // Helper: build a BoundingBoxf3 strip, clip to bed, add to members
     auto add_strip = [&](double sx0, double sx1, double sy0, double sy1) {
         BoundingBoxf3 box;
         box.min = Vec3d(sx0, sy0, -1.0);
         box.max = Vec3d(sx1, sy1,  1e4);
-        m_ixex_collision_zones.push_back(box);
+        m_imex_collision_zones.push_back(box);
 
         ExPolygon cell;
         cell.contour.append({ scale_(sx0), scale_(sy0) });
@@ -741,7 +741,7 @@ void PartPlate::calc_ixex_zones()
         if (!clipped.empty()) {
             GLModel m;
             if (init_model_from_poly(m, clipped.front(), GROUND_Z))
-                m_ixex_collision_overlay.push_back(std::move(m));
+                m_imex_collision_overlay.push_back(std::move(m));
         }
     };
 
@@ -799,29 +799,29 @@ void PartPlate::calc_ixex_zones()
     }
 }
 
-// Build a cache key from the current iXex config options, or "" if iXex is off.
+// Build a cache key from the current IDEX/IQEX config options, or "" if IDEX/IQEX is off.
 // Reads per-plate mode from m_config first, falling back to the process preset.
-std::string PartPlate::build_ixex_cache_key() const
+std::string PartPlate::build_imex_cache_key() const
 {
     if (!wxGetApp().preset_bundle)
         return "";
     const DynamicPrintConfig& printer_cfg = wxGetApp().preset_bundle->printers.get_edited_preset().config;
-    auto* is_ixex_opt = printer_cfg.option<ConfigOptionBool>("is_ixex");
-    if (!is_ixex_opt || !is_ixex_opt->value)
+    auto* is_imex_opt = printer_cfg.option<ConfigOptionBool>("is_imex");
+    if (!is_imex_opt || !is_imex_opt->value)
         return "";
     // Per-plate mode takes priority over process preset.
-    std::string active_mode = get_ixex_mode();
+    std::string active_mode = get_imex_mode();
     if (active_mode == "primary") {
         const DynamicPrintConfig& process_cfg = wxGetApp().preset_bundle->prints.get_edited_preset().config;
-        auto* mode_opt = process_cfg.option<ConfigOptionString>("ixex_parallel_mode");
+        auto* mode_opt = process_cfg.option<ConfigOptionString>("imex_parallel_mode");
         if (mode_opt && !mode_opt->value.empty())
             active_mode = mode_opt->value;
     }
-    auto* n_col_opt = printer_cfg.option<ConfigOptionInt>("ixex_tools_per_gantry");
-    auto* n_row_opt = printer_cfg.option<ConfigOptionInt>("ixex_gantry_count");
-    auto* cw_opt    = printer_cfg.option<ConfigOptionFloat>("ixex_nozzle_clearance_x");
-    auto* ch_opt    = printer_cfg.option<ConfigOptionFloat>("ixex_nozzle_clearance_y");
-    auto* mgn_opt   = printer_cfg.option<ConfigOptionFloat>("ixex_carriage_margin");
+    auto* n_col_opt = printer_cfg.option<ConfigOptionInt>("imex_tools_per_gantry");
+    auto* n_row_opt = printer_cfg.option<ConfigOptionInt>("imex_gantry_count");
+    auto* cw_opt    = printer_cfg.option<ConfigOptionFloat>("imex_nozzle_clearance_x");
+    auto* ch_opt    = printer_cfg.option<ConfigOptionFloat>("imex_nozzle_clearance_y");
+    auto* mgn_opt   = printer_cfg.option<ConfigOptionFloat>("imex_carriage_margin");
     return active_mode
          + "|" + std::to_string(n_col_opt ? n_col_opt->value : 2)
          + "x" + std::to_string(n_row_opt ? n_row_opt->value : 1)
@@ -832,19 +832,19 @@ std::string PartPlate::build_ixex_cache_key() const
 
 // Ensure zone geometry (secondary boxes, collision strips, visual meshes) is up to date.
 // Called before any collision check AND before rendering so both paths share the same data.
-void PartPlate::ensure_ixex_zones()
+void PartPlate::ensure_imex_zones()
 {
-    std::string cache_key = build_ixex_cache_key();
-    if (cache_key != m_ixex_zones_mode_cache) {
-        m_ixex_zones_mode_cache = cache_key;
-        calc_ixex_zones();
+    std::string cache_key = build_imex_cache_key();
+    if (cache_key != m_imex_zones_mode_cache) {
+        m_imex_zones_mode_cache = cache_key;
+        calc_imex_zones();
     }
 }
 
-bool PartPlate::has_ixex_placement_violations()
+bool PartPlate::has_imex_placement_violations()
 {
-    ensure_ixex_zones();
-    if (m_ixex_secondary_zone_boxes.empty() && m_ixex_collision_zones.empty())
+    ensure_imex_zones();
+    if (m_imex_secondary_zone_boxes.empty() && m_imex_collision_zones.empty())
         return false;
     for (const auto& pr : obj_to_instance_set) {
         int obj_id = pr.first;
@@ -855,11 +855,11 @@ bool PartPlate::has_ixex_placement_violations()
         Polygon hull = instance->convex_hull_2d();
         if (hull.points.empty())
             continue;
-        for (const auto& box : m_ixex_secondary_zone_boxes) {
+        for (const auto& box : m_imex_secondary_zone_boxes) {
             if (!intersection({box.polygon(true)}, {hull}).empty())
                 return true;
         }
-        for (const auto& strip : m_ixex_collision_zones) {
+        for (const auto& strip : m_imex_collision_zones) {
             if (!intersection({strip.polygon(true)}, {hull}).empty())
                 return true;
         }
@@ -867,15 +867,15 @@ bool PartPlate::has_ixex_placement_violations()
     return false;
 }
 
-void PartPlate::render_ixex_zones(bool force_default_color)
+void PartPlate::render_imex_zones(bool force_default_color)
 {
     if (force_default_color)
         return;
 
-    ensure_ixex_zones();
+    ensure_imex_zones();
 
     // Read visualization theme from printer config.
-    struct IXexTheme {
+    struct IMEXTheme {
         ColorRGBA copy;     // secondary copy zone fill
         ColorRGBA mirror;   // secondary mirror zone fill
         ColorRGBA danger;   // blocking collision strip
@@ -883,7 +883,7 @@ void PartPlate::render_ixex_zones(bool force_default_color)
     };
 
     // Standard (Okabe-Ito orange + sky blue)
-    static const IXexTheme k_standard = {
+    static const IMEXTheme k_standard = {
         { 0.337f, 0.706f, 0.914f, 0.45f },   // copy   — sky blue  #56B4E9
         { 0.902f, 0.624f, 0.000f, 0.45f },   // mirror — orange    #E69F00
         { 0.850f, 0.100f, 0.100f, 0.55f },   // danger — red
@@ -891,7 +891,7 @@ void PartPlate::render_ixex_zones(bool force_default_color)
     };
     // Deuteranopia / Protanopia: avoids red-green confusion.
     // Danger strip uses strong blue-violet (red invisible to protanopes).
-    static const IXexTheme k_deuteranopia = {
+    static const IMEXTheme k_deuteranopia = {
         { 0.000f, 0.447f, 0.698f, 0.50f },   // copy   — blue       #0072B2
         { 0.941f, 0.894f, 0.259f, 0.50f },   // mirror — yellow     #F0E442
         { 0.200f, 0.100f, 0.800f, 0.65f },   // danger — blue-violet (red not visible)
@@ -899,24 +899,24 @@ void PartPlate::render_ixex_zones(bool force_default_color)
     };
     // Tritanopia: avoids blue-yellow confusion.
     // Copy uses vermilion, mirror uses reddish-purple, margin uses teal.
-    static const IXexTheme k_tritanopia = {
+    static const IMEXTheme k_tritanopia = {
         { 0.835f, 0.369f, 0.000f, 0.50f },   // copy   — vermilion  #D55E00
         { 0.800f, 0.475f, 0.655f, 0.50f },   // mirror — reddish purple #CC79A7
         { 0.850f, 0.100f, 0.100f, 0.55f },   // danger — red (visible to tritanopes)
         { 0.000f, 0.700f, 0.600f, 0.45f },   // margin — teal
     };
     // High contrast: saturated, higher alpha for low-vision users.
-    static const IXexTheme k_high_contrast = {
+    static const IMEXTheme k_high_contrast = {
         { 0.000f, 0.600f, 1.000f, 0.65f },   // copy   — vivid blue
         { 1.000f, 0.600f, 0.000f, 0.65f },   // mirror — vivid orange
         { 1.000f, 0.000f, 0.000f, 0.75f },   // danger — full red
         { 0.000f, 1.000f, 0.200f, 0.60f },   // margin — bright green
     };
 
-    const IXexTheme* theme = &k_standard;
+    const IMEXTheme* theme = &k_standard;
     if (wxGetApp().preset_bundle) {
         const DynamicPrintConfig& pcfg = wxGetApp().preset_bundle->printers.get_edited_preset().config;
-        if (auto* t = pcfg.option<ConfigOptionString>("ixex_viz_theme")) {
+        if (auto* t = pcfg.option<ConfigOptionString>("imex_viz_theme")) {
             if      (t->value == "deuteranopia")  theme = &k_deuteranopia;
             else if (t->value == "tritanopia")    theme = &k_tritanopia;
             else if (t->value == "high_contrast") theme = &k_high_contrast;
@@ -926,27 +926,27 @@ void PartPlate::render_ixex_zones(bool force_default_color)
     // Both fills and border lines use the flat shader already active from render().
     glsafe(::glDepthMask(GL_FALSE));
 
-    if (!m_ixex_copy_zones.empty())
-        for (GLModel& z : m_ixex_copy_zones)
+    if (!m_imex_copy_zones.empty())
+        for (GLModel& z : m_imex_copy_zones)
             if (z.is_initialized()) { z.set_color(theme->copy); z.render(); }
 
-    if (!m_ixex_mirror_zones.empty())
-        for (GLModel& z : m_ixex_mirror_zones)
+    if (!m_imex_mirror_zones.empty())
+        for (GLModel& z : m_imex_mirror_zones)
             if (z.is_initialized()) { z.set_color(theme->mirror); z.render(); }
 
     glsafe(::glDepthMask(GL_TRUE));
 
 
-    if (!m_ixex_collision_overlay.empty()) {
+    if (!m_imex_collision_overlay.empty()) {
         glsafe(::glDepthMask(GL_FALSE));
-        for (GLModel& s : m_ixex_collision_overlay)
+        for (GLModel& s : m_imex_collision_overlay)
             if (s.is_initialized()) { s.set_color(theme->danger); s.render(); }
         glsafe(::glDepthMask(GL_TRUE));
     }
 
-    if (!m_ixex_margin_overlay.empty()) {
+    if (!m_imex_margin_overlay.empty()) {
         glsafe(::glDepthMask(GL_FALSE));
-        for (GLModel& b : m_ixex_margin_overlay)
+        for (GLModel& b : m_imex_margin_overlay)
             if (b.is_initialized()) { b.set_color(theme->margin); b.render(); }
         glsafe(::glDepthMask(GL_TRUE));
     }
@@ -1683,17 +1683,17 @@ void PartPlate::render_icons(bool bottom, bool only_name, int hover_id)
             } else
                 render_icon_texture(m_move_front_icon.model, m_partplate_list->m_move_front_texture);
 
-            // iXex mode icon — only when is_ixex is active
+            // IDEX/IQEX mode icon — only when is_imex is active
             {
                 PresetBundle* pb = wxGetApp().preset_bundle;
-                auto* is_ixex_opt = pb ? pb->printers.get_edited_preset().config.option<ConfigOptionBool>("is_ixex") : nullptr;
-                if (is_ixex_opt && is_ixex_opt->value) {
-                    if (hover_id == (int)PLATE_IXEX_MODE_ID) {
-                        render_icon_texture(m_ixex_mode_icon.model, m_partplate_list->m_ixex_mode_hovered_texture);
-                        std::string cur = get_ixex_mode();
-                        show_tooltip(_u8L("iXex mode: ") + cur + _u8L(" (left-click to cycle, right-click for menu)"));
+                auto* is_imex_opt = pb ? pb->printers.get_edited_preset().config.option<ConfigOptionBool>("is_imex") : nullptr;
+                if (is_imex_opt && is_imex_opt->value) {
+                    if (hover_id == (int)PLATE_IMEX_MODE_ID) {
+                        render_icon_texture(m_imex_mode_icon.model, m_partplate_list->m_imex_mode_hovered_texture);
+                        std::string cur = get_imex_mode();
+                        show_tooltip(_u8L("IDEX/IQEX mode: ") + cur + _u8L(" (left-click to cycle, right-click for menu)"));
                     } else {
-                        render_icon_texture(m_ixex_mode_icon.model, m_partplate_list->m_ixex_mode_texture);
+                        render_icon_texture(m_imex_mode_icon.model, m_partplate_list->m_imex_mode_texture);
                     }
                 }
             }
@@ -2007,11 +2007,11 @@ void PartPlate::register_raycasters_for_picking(GLCanvas3D &canvas)
     if (dual_bbl)
         register_model_for_picking(canvas, m_plate_filament_map_icon, picking_id_component(PLATE_FILAMENT_MAP_ID));
 
-    // Register iXex mode icon only when iXex is active on the current printer preset.
+    // Register IDEX/IQEX mode icon only when IDEX/IQEX is active on the current printer preset.
     if (preset) {
-        auto* is_ixex_opt = preset->printers.get_edited_preset().config.option<ConfigOptionBool>("is_ixex");
-        if (is_ixex_opt && is_ixex_opt->value)
-            register_model_for_picking(canvas, m_ixex_mode_icon, picking_id_component(PLATE_IXEX_MODE_ID));
+        auto* is_imex_opt = preset->printers.get_edited_preset().config.option<ConfigOptionBool>("is_imex");
+        if (is_imex_opt && is_imex_opt->value)
+            register_model_for_picking(canvas, m_imex_mode_icon, picking_id_component(PLATE_IMEX_MODE_ID));
     }
 }
 
@@ -3024,8 +3024,8 @@ bool PartPlate::contain_instance_totally(int obj_id, int instance_id) const
 //check whether instance is outside the plate or not
 bool PartPlate::check_outside(int obj_id, int instance_id, BoundingBoxf3* bounding_box)
 {
-	// Ensure iXex zone geometry is current before any placement check.
-	ensure_ixex_zones();
+	// Ensure IDEX/IQEX zone geometry is current before any placement check.
+	ensure_imex_zones();
 
 	bool outside = true;
 
@@ -3070,14 +3070,14 @@ bool PartPlate::check_outside(int obj_id, int instance_id, BoundingBoxf3* boundi
 			outside = false;
 	}
 
-    // iXex placement check (prepare-mode bounding-box test).
+    // IDEX/IQEX placement check (prepare-mode bounding-box test).
     // Block objects that overlap secondary (copy/mirror) zones or the carriage
     // danger strip at the primary zone boundary.  Reuses the existing
     // outside=true → instance_outside_set → update_states() → blocks slicing path.
-    if (!outside && (!m_ixex_secondary_zone_boxes.empty() || !m_ixex_collision_zones.empty())) {
+    if (!outside && (!m_imex_secondary_zone_boxes.empty() || !m_imex_collision_zones.empty())) {
         Polygon obj_hull = instance->convex_hull_2d(); // scaled Clipper coords
         // 1. Object must not touch any secondary zone.
-        for (const auto& box : m_ixex_secondary_zone_boxes) {
+        for (const auto& box : m_imex_secondary_zone_boxes) {
             Polygon p = box.polygon(true);
             if (!intersection({ p }, { obj_hull }).empty()) {
                 outside = true;
@@ -3086,7 +3086,7 @@ bool PartPlate::check_outside(int obj_id, int instance_id, BoundingBoxf3* boundi
         }
         // 2. Object must not enter the carriage danger strip inside the primary zone.
         if (!outside) {
-            for (const auto& strip : m_ixex_collision_zones) {
+            for (const auto& strip : m_imex_collision_zones) {
                 Polygon strip_poly = strip.polygon(true);
                 if (!intersection({ strip_poly }, { obj_hull }).empty()) {
                     outside = true;
@@ -3684,8 +3684,8 @@ bool PartPlate::set_shape(const Pointfs& shape, const Pointfs& exclude_areas, co
 
 			const BoundingBox& pp_bbox = poly.contour.bounding_box();
 			calc_gridlines(poly, pp_bbox);
-			m_ixex_zones_mode_cache = "\x01"; // force rebuild on next render
-			calc_ixex_zones();
+			m_imex_zones_mode_cache = "\x01"; // force rebuild on next render
+			calc_imex_zones();
 
 			calc_vertex_for_icons(0, m_del_icon);
 			calc_vertex_for_icons(1, m_orient_icon);
@@ -3699,9 +3699,9 @@ bool PartPlate::set_shape(const Pointfs& shape, const Pointfs& exclude_areas, co
 			calc_vertex_for_icons(dual_bbl ? 5 : 6, m_plate_filament_map_icon);
 			calc_vertex_for_icons(dual_bbl ? 6 : 5, m_move_front_icon);
 			{
-				auto* is_ixex_opt = preset->printers.get_edited_preset().config.option<ConfigOptionBool>("is_ixex");
-				if (is_ixex_opt && is_ixex_opt->value)
-					calc_vertex_for_icons(dual_bbl ? 7 : 6, m_ixex_mode_icon);
+				auto* is_imex_opt = preset->printers.get_edited_preset().config.option<ConfigOptionBool>("is_imex");
+				if (is_imex_opt && is_imex_opt->value)
+					calc_vertex_for_icons(dual_bbl ? 7 : 6, m_imex_mode_icon);
 			}
 
 			calc_vertex_for_number(0, false, m_plate_idx_icon);
@@ -3795,7 +3795,7 @@ void PartPlate::render(const Transform3d& view_matrix, const Transform3d& projec
             render_background(force_background_color);
 
             render_exclude_area(force_background_color);
-            render_ixex_zones(force_background_color);
+            render_imex_zones(force_background_color);
             if(m_selected && wxGetApp().plater()->get_enable_wrapping_detection()){
                 if(!m_wrapping_detection_triangles.is_initialized()){
                     auto points = get_plate_wrapping_detection_area();
@@ -4572,17 +4572,17 @@ void PartPlateList::generate_icon_textures()
 		}
 	}
 
-    // iXex mode icon textures (fall back gracefully if SVG not present yet)
+    // IDEX/IQEX mode icon textures (fall back gracefully if SVG not present yet)
     {
-        file_name = path + (m_is_dark ? "plate_ixex_mode_dark.svg" : "plate_ixex_mode.svg");
-        if (!m_ixex_mode_texture.load_from_svg_file(file_name, true, false, false, icon_size)) {
-            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":load file %1% failed (iXex mode icon)") % file_name;
+        file_name = path + (m_is_dark ? "plate_imex_mode_dark.svg" : "plate_imex_mode.svg");
+        if (!m_imex_mode_texture.load_from_svg_file(file_name, true, false, false, icon_size)) {
+            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":load file %1% failed (IDEX/IQEX mode icon)") % file_name;
         }
     }
     {
-        file_name = path + (m_is_dark ? "plate_ixex_mode_hover_dark.svg" : "plate_ixex_mode_hover.svg");
-        if (!m_ixex_mode_hovered_texture.load_from_svg_file(file_name, true, false, false, icon_size)) {
-            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":load file %1% failed (iXex mode hover icon)") % file_name;
+        file_name = path + (m_is_dark ? "plate_imex_mode_hover_dark.svg" : "plate_imex_mode_hover.svg");
+        if (!m_imex_mode_hovered_texture.load_from_svg_file(file_name, true, false, false, icon_size)) {
+            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":load file %1% failed (IDEX/IQEX mode hover icon)") % file_name;
         }
     }
 
@@ -4629,8 +4629,8 @@ void PartPlateList::release_icon_textures()
     m_plate_set_filament_map_hovered_texture.reset();
 	m_plate_name_edit_texture.reset();
 	m_plate_name_edit_hovered_texture.reset();
-    m_ixex_mode_texture.reset();
-    m_ixex_mode_hovered_texture.reset();
+    m_imex_mode_texture.reset();
+    m_imex_mode_hovered_texture.reset();
 	for (int i = 0;i < MAX_PLATE_COUNT; i++) {
 		m_idx_textures[i].reset();
 	}

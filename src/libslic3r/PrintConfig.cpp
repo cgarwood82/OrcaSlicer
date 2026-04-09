@@ -5487,14 +5487,14 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(true));
 
-    // iXex (independent X extruder) — parallel printing support for IDEX/IQEX printers
-    def = this->add("is_ixex", coBool);
-    def->label = L("iXex Printer");
-    def->tooltip = L("Enable iXex (independent X extruder) support for IDEX/IQEX printers with multiple independent carriages.");
+    // IDEX/IQEX (independent X extruder) — parallel printing support for IDEX/IQEX printers
+    def = this->add("is_imex", coBool);
+    def->label = L("IDEX/IQEX Printer");
+    def->tooltip = L("Enable IDEX/IQEX (independent X extruder) support for IDEX/IQEX printers with multiple independent carriages.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
 
-    def = this->add("ixex_gantry_count", coInt);
+    def = this->add("imex_gantry_count", coInt);
     def->label = L("Gantry Count");
     def->tooltip = L("Number of independent Y-axis gantries. 1 for IDEX/single-rail IQEX. 2 for dual-gantry systems (divides bed into rows).");
     def->min = 1;
@@ -5502,7 +5502,7 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(1));
 
-    def = this->add("ixex_tools_per_gantry", coInt);
+    def = this->add("imex_tools_per_gantry", coInt);
     def->label = L("Tools per Gantry");
     def->tooltip = L("Number of independent toolheads per gantry along X. 2 for IDEX-style.");
     def->min = 1;
@@ -5510,7 +5510,7 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(2));
 
-    def = this->add("ixex_tool_layout", coString);
+    def = this->add("imex_tool_layout", coString);
     def->label = L("Tool 0 Corner");
     def->tooltip = L("Physical corner of the bed where tool T0 (index 0) is located. "
                      "Determines how tool indices map to bed zones. "
@@ -5518,7 +5518,7 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionString("front-left"));
 
-    def = this->add("ixex_nozzle_clearance_x", coFloat);
+    def = this->add("imex_nozzle_clearance_x", coFloat);
     def->label = L("Nozzle Clearance X");
     def->tooltip = L("Distance (mm) from the nozzle to the collision-side carriage edge in X. Used to calculate the width of the collision exclusion strip at each X boundary.");
     def->sidetext = L("mm");
@@ -5526,7 +5526,7 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(30.0));
 
-    def = this->add("ixex_nozzle_clearance_y", coFloat);
+    def = this->add("imex_nozzle_clearance_y", coFloat);
     def->label = L("Nozzle Clearance Y");
     def->tooltip = L("Distance (mm) from the nozzle to the collision-side carriage edge in Y. Used to calculate the width of the collision exclusion strip at each Y boundary.");
     def->sidetext = L("mm");
@@ -5534,7 +5534,7 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(30.0));
 
-    def = this->add("ixex_carriage_margin", coFloat);
+    def = this->add("imex_carriage_margin", coFloat);
     def->label = L("Safety Margin");
     def->tooltip = L("Non-blocking advisory clearance strip (mm) drawn inside the primary zone at each carriage boundary. Parts placed within this strip will still slice; it is a visual reminder to leave extra clearance near the zone edge.");
     def->sidetext = L("mm");
@@ -5543,32 +5543,32 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(0.0));
 
-    def = this->add("ixex_viz_theme", coString);
+    def = this->add("imex_viz_theme", coString);
     def->label = L("Visualization Theme");
-    def->tooltip = L("Color theme for iXex bed zone visualization. Choose a colorblind-friendly theme if needed.");
+    def->tooltip = L("Color theme for IDEX/IQEX bed zone visualization. Choose a colorblind-friendly theme if needed.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionString("standard"));
 
-    def = this->add("ixex_parallel_mode", coString);
-    def->label = L("iXex Print Mode");
-    def->tooltip = L("Name of the active iXex parallel print mode, or \"primary\" for single-carriage printing. Requires iXex Printer enabled in the Printer preset (Printer \u2192 iXex tab).");
+    def = this->add("imex_parallel_mode", coString);
+    def->label = L("IDEX/IQEX Print Mode");
+    def->tooltip = L("Name of the active IDEX/IQEX parallel print mode, or \"primary\" for single-carriage printing. Requires IDEX/IQEX Printer enabled in the Printer preset (Printer \u2192 IDEX/IQEX tab).");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionString("primary"));
 
-    def = this->add("ixex_mode_names", coStrings);
-    def->label = L("iXex Mode Names");
-    def->tooltip = L("Display names for each user-defined iXex parallel print mode.");
+    def = this->add("imex_mode_names", coStrings);
+    def->label = L("IDEX/IQEX Mode Names");
+    def->tooltip = L("Display names for each user-defined IDEX/IQEX parallel print mode.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionStrings());
 
-    def = this->add("ixex_mode_active_tools", coStrings);
-    def->label = L("iXex Mode Active Tools");
-    def->tooltip = L("Tool role assignments for each mode. Format: \"idx:P,idx:C,idx:M\" where P=Primary, C=Copy, M=Mirror (e.g. \"0:P,1:C,2:M,3:M\"). Managed by the iXex Modes editor in the Printer preset.");
+    def = this->add("imex_mode_active_tools", coStrings);
+    def->label = L("IDEX/IQEX Mode Active Tools");
+    def->tooltip = L("Tool role assignments for each mode. Format: \"idx:P,idx:C,idx:M\" where P=Primary, C=Copy, M=Mirror (e.g. \"0:P,1:C,2:M,3:M\"). Managed by the IDEX/IQEX Modes editor in the Printer preset.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionStrings());
 
-    def = this->add("ixex_mode_gcodes", coStrings);
-    def->label = L("iXex Mode G-codes");
+    def = this->add("imex_mode_gcodes", coStrings);
+    def->label = L("IDEX/IQEX Mode G-codes");
     def->tooltip = L("G-code or macro call to inject at print start for each mode.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionStrings());

@@ -150,7 +150,7 @@ public:
         };
 
         Marker marker;
-        std::vector<Marker> m_ixex_secondary_markers; // one per active secondary carriage in iXex mode
+        std::vector<Marker> m_imex_secondary_markers; // one per active secondary carriage in IDEX/IQEX mode
         GCodeWindow gcode_window;
         float m_scale = 1.0;
         bool m_show_marker = false;
@@ -205,8 +205,8 @@ private:
     ConfigOptionMode m_user_mode;
     bool m_fold = {false};
     std::string m_marker_filename;      // cached for lazy secondary marker init
-    std::string m_ixex_last_mode;       // detect mode changes for secondary marker rebuild
-    GLModel     m_ixex_toolhead_box;    // shared box mesh for all carriage footprint overlays
+    std::string m_imex_last_mode;       // detect mode changes for secondary marker rebuild
+    GLModel     m_imex_toolhead_box;    // shared box mesh for all carriage footprint overlays
 
     size_t m_extruders_count;
     std::vector<float> m_filament_diameters;

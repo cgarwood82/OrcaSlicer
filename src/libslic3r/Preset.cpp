@@ -961,8 +961,8 @@ static std::vector<std::string> s_Preset_print_options {
      "enable_wrapping_detection",
      "seam_slope_type", "seam_slope_conditional", "scarf_angle_threshold", "scarf_joint_speed", "scarf_joint_flow_ratio", "seam_slope_start_height", "seam_slope_entire_loop", "seam_slope_min_length", "seam_slope_steps", "seam_slope_inner_walls", "scarf_overhang_threshold",
      "interlocking_beam", "interlocking_orientation", "interlocking_beam_layer_count", "interlocking_depth", "interlocking_boundary_avoidance", "interlocking_beam_width","calib_flowrate_topinfill_special_order",
-     // iXex parallel print mode (per-print selection)
-     "ixex_parallel_mode",
+     // IDEX/IQEX parallel print mode (per-print selection)
+     "imex_parallel_mode",
 };
 
 static std::vector<std::string> s_Preset_filament_options {/*"filament_colour", */ "default_filament_colour", "required_nozzle_HRC", "filament_diameter", "pellet_flow_coefficient", "volumetric_speed_coefficients", "filament_type",
@@ -1040,10 +1040,10 @@ static std::vector<std::string> s_Preset_printer_options {
     "z_offset",
     "disable_m73", "preferred_orientation", "emit_machine_limits_to_gcode", "pellet_modded_printer", "support_multi_bed_types", "default_bed_type", "bed_mesh_min","bed_mesh_max","bed_mesh_probe_distance", "adaptive_bed_mesh_margin", "enable_long_retraction_when_cut","long_retractions_when_cut","retraction_distances_when_cut",
     "bed_temperature_formula", "nozzle_flush_dataset",
-    // iXex (independent X extruder) — printer capability and user-defined modes
-    "is_ixex", "ixex_gantry_count", "ixex_tools_per_gantry", "ixex_tool_layout",
-    "ixex_nozzle_clearance_x", "ixex_nozzle_clearance_y", "ixex_carriage_margin", "ixex_viz_theme",
-    "ixex_mode_names", "ixex_mode_active_tools", "ixex_mode_gcodes"
+    // IDEX/IQEX (independent X extruder) — printer capability and user-defined modes
+    "is_imex", "imex_gantry_count", "imex_tools_per_gantry", "imex_tool_layout",
+    "imex_nozzle_clearance_x", "imex_nozzle_clearance_y", "imex_carriage_margin", "imex_viz_theme",
+    "imex_mode_names", "imex_mode_active_tools", "imex_mode_gcodes"
     };
 
 static std::vector<std::string> s_Preset_sla_print_options {

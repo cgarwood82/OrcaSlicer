@@ -4338,7 +4338,7 @@ void TabPrinter::build()
 }
 
 // ---------------------------------------------------------------------------
-// IXexModesCtrl — visual parallel-mode editor for the iXex printer tab
+// IMEXModesCtrl — visual parallel-mode editor for the IDEX/IQEX printer tab
 //
 // Tool button states:
 //   0 = Inactive  (grey)   — not participating in this mode
@@ -4348,7 +4348,7 @@ void TabPrinter::build()
 //
 // Active-tools string format: "idx:P,idx:C,idx:M"  (backwards-compat: plain "idx" = Primary)
 // ---------------------------------------------------------------------------
-class IXexModesCtrl : public wxPanel {
+class IMEXModesCtrl : public wxPanel {
 public:
     std::function<void()> on_change;
 
@@ -4360,7 +4360,7 @@ public:
         return 0; // "front-left" default
     }
 
-    IXexModesCtrl(wxWindow* parent, int n_cols, int n_rows, int layout = 0)
+    IMEXModesCtrl(wxWindow* parent, int n_cols, int n_rows, int layout = 0)
         : wxPanel(parent, wxID_ANY), m_n_cols(std::max(1, n_cols)), m_n_rows(std::max(1, n_rows)), m_layout(layout)
     {
         m_outer = new wxBoxSizer(wxVERTICAL);
@@ -4437,9 +4437,9 @@ public:
 
     void load_from_config(const DynamicPrintConfig& cfg) {
         clear_rows();
-        auto* names  = cfg.option<ConfigOptionStrings>("ixex_mode_names");
-        auto* tools  = cfg.option<ConfigOptionStrings>("ixex_mode_active_tools");
-        auto* gcodes = cfg.option<ConfigOptionStrings>("ixex_mode_gcodes");
+        auto* names  = cfg.option<ConfigOptionStrings>("imex_mode_names");
+        auto* tools  = cfg.option<ConfigOptionStrings>("imex_mode_active_tools");
+        auto* gcodes = cfg.option<ConfigOptionStrings>("imex_mode_gcodes");
         size_t n = names ? names->values.size() : 0;
         for (size_t i = 0; i < n; ++i)
             add_row(names->values[i],
@@ -4931,14 +4931,14 @@ void TabPrinter::build_fff()
         option.opt.height = gcode_field_height;//150;
         optgroup->append_single_option_line(option, "printer_machine_gcode#template-custom-g-code");
 
-    page = add_options_page(L("iXex"), "custom-gcode_multi_material"); // ORCA: icon only visible on placeholders
+    page = add_options_page(L("IDEX/IQEX"), "custom-gcode_multi_material"); // ORCA: icon only visible on placeholders
         optgroup = page->new_optgroup(L("Carriage Configuration"), L"param_advanced");
-        optgroup->append_single_option_line("is_ixex");
-        optgroup->append_single_option_line("ixex_gantry_count");
-        optgroup->append_single_option_line("ixex_tools_per_gantry");
+        optgroup->append_single_option_line("is_imex");
+        optgroup->append_single_option_line("imex_gantry_count");
+        optgroup->append_single_option_line("imex_tools_per_gantry");
         {
             // Tool 0 corner selector
-            auto opt = optgroup->get_option("ixex_tool_layout");
+            auto opt = optgroup->get_option("imex_tool_layout");
             auto line = Line{ opt.opt.label, opt.opt.tooltip };
             line.append_option(opt);
             line.widget = [this](wxWindow* parent) -> wxSizer* {
@@ -4947,37 +4947,37 @@ void TabPrinter::build_fff()
                     _L("Rear-left"), _L("Rear-right")
                 };
                 static const char* values[] = { "front-left", "front-right", "rear-left", "rear-right" };
-                m_ixex_layout_combo = new ComboBox(parent, wxID_ANY, wxEmptyString,
+                m_imex_layout_combo = new ComboBox(parent, wxID_ANY, wxEmptyString,
                                                    wxDefaultPosition,
                                                    wxSize(12 * wxGetApp().em_unit(), -1),
                                                    4, choices, wxCB_READONLY);
-                m_ixex_layout_combo->GetDropDown().SetUseContentWidth(true);
+                m_imex_layout_combo->GetDropDown().SetUseContentWidth(true);
                 // Set current selection
                 std::string cur = "front-left";
-                if (auto* o = m_config->option<ConfigOptionString>("ixex_tool_layout")) cur = o->value;
+                if (auto* o = m_config->option<ConfigOptionString>("imex_tool_layout")) cur = o->value;
                 for (int i = 0; i < 4; ++i)
-                    if (cur == values[i]) { m_ixex_layout_combo->SetSelection(i); break; }
-                m_ixex_layout_combo->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent&) {
+                    if (cur == values[i]) { m_imex_layout_combo->SetSelection(i); break; }
+                m_imex_layout_combo->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent&) {
                     static const char* layout_vals[] = { "front-left", "front-right", "rear-left", "rear-right" };
-                    int sel = m_ixex_layout_combo->GetSelection();
+                    int sel = m_imex_layout_combo->GetSelection();
                     std::string val = (sel >= 0 && sel < 4) ? layout_vals[sel] : "front-left";
-                    m_config->set_key_value("ixex_tool_layout", new ConfigOptionString(val));
-                    on_value_change("ixex_tool_layout", val);
-                    if (m_ixex_modes_ctrl)
-                        m_ixex_modes_ctrl->set_grid_size(
-                            m_config->opt_int("ixex_tools_per_gantry"),
-                            m_config->opt_int("ixex_gantry_count"),
-                            IXexModesCtrl::parse_layout(val));
+                    m_config->set_key_value("imex_tool_layout", new ConfigOptionString(val));
+                    on_value_change("imex_tool_layout", val);
+                    if (m_imex_modes_ctrl)
+                        m_imex_modes_ctrl->set_grid_size(
+                            m_config->opt_int("imex_tools_per_gantry"),
+                            m_config->opt_int("imex_gantry_count"),
+                            IMEXModesCtrl::parse_layout(val));
                 });
                 auto* s = new wxBoxSizer(wxHORIZONTAL);
-                s->Add(m_ixex_layout_combo, 0, wxALIGN_CENTER_VERTICAL);
+                s->Add(m_imex_layout_combo, 0, wxALIGN_CENTER_VERTICAL);
                 return s;
             };
             optgroup->append_line(line);
         }
-        optgroup->append_single_option_line("ixex_nozzle_clearance_x");
-        optgroup->append_single_option_line("ixex_nozzle_clearance_y");
-        optgroup->append_single_option_line("ixex_carriage_margin");
+        optgroup->append_single_option_line("imex_nozzle_clearance_x");
+        optgroup->append_single_option_line("imex_nozzle_clearance_y");
+        optgroup->append_single_option_line("imex_carriage_margin");
 
         {
             static const wxString theme_choices[] = {
@@ -4986,27 +4986,27 @@ void TabPrinter::build_fff()
                 _L("Tritanopia (blue-yellow)"),
                 _L("High Contrast") };
             static const char* theme_vals[] = { "standard", "deuteranopia", "tritanopia", "high_contrast" };
-            auto opt  = optgroup->get_option("ixex_viz_theme");
+            auto opt  = optgroup->get_option("imex_viz_theme");
             auto line = Line{ opt.opt.label, opt.opt.tooltip };
             line.append_option(opt);
             line.widget = [this](wxWindow* parent) -> wxSizer* {
-                m_ixex_theme_combo = new ComboBox(parent, wxID_ANY, wxEmptyString,
+                m_imex_theme_combo = new ComboBox(parent, wxID_ANY, wxEmptyString,
                                                   wxDefaultPosition,
                                                   wxSize(22 * wxGetApp().em_unit(), -1),
                                                   4, theme_choices, wxCB_READONLY);
-                m_ixex_theme_combo->GetDropDown().SetUseContentWidth(true);
+                m_imex_theme_combo->GetDropDown().SetUseContentWidth(true);
                 std::string cur = "standard";
-                if (auto* o = m_config->option<ConfigOptionString>("ixex_viz_theme")) cur = o->value;
+                if (auto* o = m_config->option<ConfigOptionString>("imex_viz_theme")) cur = o->value;
                 for (int i = 0; i < 4; ++i)
-                    if (cur == theme_vals[i]) { m_ixex_theme_combo->SetSelection(i); break; }
-                m_ixex_theme_combo->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent&) {
-                    int sel = m_ixex_theme_combo->GetSelection();
+                    if (cur == theme_vals[i]) { m_imex_theme_combo->SetSelection(i); break; }
+                m_imex_theme_combo->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent&) {
+                    int sel = m_imex_theme_combo->GetSelection();
                     std::string val = (sel >= 0 && sel < 4) ? theme_vals[sel] : "standard";
-                    m_config->set_key_value("ixex_viz_theme", new ConfigOptionString(val));
-                    on_value_change("ixex_viz_theme", val);
+                    m_config->set_key_value("imex_viz_theme", new ConfigOptionString(val));
+                    on_value_change("imex_viz_theme", val);
                 });
                 auto* s = new wxBoxSizer(wxHORIZONTAL);
-                s->Add(m_ixex_theme_combo, 0, wxALIGN_CENTER_VERTICAL);
+                s->Add(m_imex_theme_combo, 0, wxALIGN_CENTER_VERTICAL);
                 return s;
             };
             optgroup->append_line(line);
@@ -5018,23 +5018,23 @@ void TabPrinter::build_fff()
             auto line = Line{ L("Modes"), L("") };
             line.full_width = 1;
             line.widget = [this](wxWindow* parent) -> wxSizer* {
-                int n_cols = m_config->opt_int("ixex_tools_per_gantry");
-                int n_rows = m_config->opt_int("ixex_gantry_count");
+                int n_cols = m_config->opt_int("imex_tools_per_gantry");
+                int n_rows = m_config->opt_int("imex_gantry_count");
                 std::string layout_str = "front-left";
-                if (auto* o = m_config->option<ConfigOptionString>("ixex_tool_layout")) layout_str = o->value;
-                int layout = IXexModesCtrl::parse_layout(layout_str);
-                m_ixex_modes_ctrl = new IXexModesCtrl(parent, n_cols, n_rows, layout);
-                m_ixex_modes_ctrl->load_from_config(*m_config);
-                m_ixex_modes_ctrl->on_change = [this]() {
-                    auto [names, tools, gcodes] = m_ixex_modes_ctrl->get_mode_data();
-                    m_config->set_key_value("ixex_mode_names",        new ConfigOptionStrings(names));
-                    m_config->set_key_value("ixex_mode_active_tools", new ConfigOptionStrings(tools));
-                    m_config->set_key_value("ixex_mode_gcodes",       new ConfigOptionStrings(gcodes));
+                if (auto* o = m_config->option<ConfigOptionString>("imex_tool_layout")) layout_str = o->value;
+                int layout = IMEXModesCtrl::parse_layout(layout_str);
+                m_imex_modes_ctrl = new IMEXModesCtrl(parent, n_cols, n_rows, layout);
+                m_imex_modes_ctrl->load_from_config(*m_config);
+                m_imex_modes_ctrl->on_change = [this]() {
+                    auto [names, tools, gcodes] = m_imex_modes_ctrl->get_mode_data();
+                    m_config->set_key_value("imex_mode_names",        new ConfigOptionStrings(names));
+                    m_config->set_key_value("imex_mode_active_tools", new ConfigOptionStrings(tools));
+                    m_config->set_key_value("imex_mode_gcodes",       new ConfigOptionStrings(gcodes));
                     update_dirty();
-                    on_value_change("ixex_mode_names", std::string(""));
+                    on_value_change("imex_mode_names", std::string(""));
                 };
                 auto* sizer = new wxBoxSizer(wxHORIZONTAL);
-                sizer->Add(m_ixex_modes_ctrl, 1, wxEXPAND);
+                sizer->Add(m_imex_modes_ctrl, 1, wxEXPAND);
                 return sizer;
             };
             modes_og->append_line(line);
@@ -5622,28 +5622,28 @@ void TabPrinter::reload_config()
 
     if (m_config) {
         // Sync layout combo
-        if (m_ixex_layout_combo) {
+        if (m_imex_layout_combo) {
             static const char* layout_vals[] = { "front-left", "front-right", "rear-left", "rear-right" };
             std::string cur = "front-left";
-            if (auto* o = m_config->option<ConfigOptionString>("ixex_tool_layout")) cur = o->value;
+            if (auto* o = m_config->option<ConfigOptionString>("imex_tool_layout")) cur = o->value;
             for (int i = 0; i < 4; ++i)
-                if (cur == layout_vals[i]) { m_ixex_layout_combo->SetSelection(i); break; }
+                if (cur == layout_vals[i]) { m_imex_layout_combo->SetSelection(i); break; }
         }
         // Sync theme combo
-        if (m_ixex_theme_combo) {
+        if (m_imex_theme_combo) {
             static const char* theme_vals[] = { "standard", "deuteranopia", "tritanopia", "high_contrast" };
             std::string cur = "standard";
-            if (auto* o = m_config->option<ConfigOptionString>("ixex_viz_theme")) cur = o->value;
+            if (auto* o = m_config->option<ConfigOptionString>("imex_viz_theme")) cur = o->value;
             for (int i = 0; i < 4; ++i)
-                if (cur == theme_vals[i]) { m_ixex_theme_combo->SetSelection(i); break; }
+                if (cur == theme_vals[i]) { m_imex_theme_combo->SetSelection(i); break; }
         }
-        if (m_ixex_modes_ctrl) {
-            int n_cols = m_config->opt_int("ixex_tools_per_gantry");
-            int n_rows = m_config->opt_int("ixex_gantry_count");
+        if (m_imex_modes_ctrl) {
+            int n_cols = m_config->opt_int("imex_tools_per_gantry");
+            int n_rows = m_config->opt_int("imex_gantry_count");
             std::string layout_str = "front-left";
-            if (auto* o = m_config->option<ConfigOptionString>("ixex_tool_layout")) layout_str = o->value;
-            m_ixex_modes_ctrl->set_grid_size(n_cols, n_rows, IXexModesCtrl::parse_layout(layout_str));
-            m_ixex_modes_ctrl->load_from_config(*m_config);
+            if (auto* o = m_config->option<ConfigOptionString>("imex_tool_layout")) layout_str = o->value;
+            m_imex_modes_ctrl->set_grid_size(n_cols, n_rows, IMEXModesCtrl::parse_layout(layout_str));
+            m_imex_modes_ctrl->load_from_config(*m_config);
         }
     }
 }
@@ -5662,9 +5662,9 @@ void TabPrinter::clear_pages()
 {
     Tab::clear_pages();
     m_reset_to_filament_color = nullptr;
-    m_ixex_modes_ctrl   = nullptr;
-    m_ixex_layout_combo = nullptr;
-    m_ixex_theme_combo  = nullptr;
+    m_imex_modes_ctrl   = nullptr;
+    m_imex_layout_combo = nullptr;
+    m_imex_theme_combo  = nullptr;
 }
 
 void TabPrinter::toggle_options()
@@ -5874,13 +5874,13 @@ void TabPrinter::update_fff()
         m_use_silent_mode = m_config->opt_bool("silent_mode");
     }
 
-    // Sync iXex tool grid whenever carriage configuration changes.
+    // Sync IDEX/IQEX tool grid whenever carriage configuration changes.
     // set_grid_size() is a no-op when dimensions and layout are unchanged.
-    if (m_ixex_modes_ctrl) {
-        int n_cols = m_config->opt_int("ixex_tools_per_gantry");
-        int n_rows = m_config->opt_int("ixex_gantry_count");
-        std::string layout_str = m_config->opt_string("ixex_tool_layout");
-        m_ixex_modes_ctrl->set_grid_size(n_cols, n_rows, IXexModesCtrl::parse_layout(layout_str));
+    if (m_imex_modes_ctrl) {
+        int n_cols = m_config->opt_int("imex_tools_per_gantry");
+        int n_rows = m_config->opt_int("imex_gantry_count");
+        std::string layout_str = m_config->opt_string("imex_tool_layout");
+        m_imex_modes_ctrl->set_grid_size(n_cols, n_rows, IMEXModesCtrl::parse_layout(layout_str));
     }
 
     toggle_options();
