@@ -4931,115 +4931,6 @@ void TabPrinter::build_fff()
         option.opt.height = gcode_field_height;//150;
         optgroup->append_single_option_line(option, "printer_machine_gcode#template-custom-g-code");
 
-    page = add_options_page(L("IDEX/IQEX"), "custom-gcode_multi_material"); // ORCA: icon only visible on placeholders
-        optgroup = page->new_optgroup(L("Carriage Configuration"), L"param_advanced");
-        optgroup->append_single_option_line("is_imex");
-        optgroup->append_single_option_line("imex_gantry_count");
-        optgroup->append_single_option_line("imex_tools_per_gantry");
-        {
-            // Tool 0 corner selector
-            auto opt = optgroup->get_option("imex_tool_layout");
-            auto line = Line{ opt.opt.label, opt.opt.tooltip };
-            line.append_option(opt);
-            line.widget = [this](wxWindow* parent) -> wxSizer* {
-                static const wxString choices[] = {
-                    _L("Front-left"), _L("Front-right"),
-                    _L("Rear-left"), _L("Rear-right")
-                };
-                static const char* values[] = { "front-left", "front-right", "rear-left", "rear-right" };
-                m_imex_layout_combo = new ComboBox(parent, wxID_ANY, wxEmptyString,
-                                                   wxDefaultPosition,
-                                                   wxSize(12 * wxGetApp().em_unit(), -1),
-                                                   4, choices, wxCB_READONLY);
-                m_imex_layout_combo->GetDropDown().SetUseContentWidth(true);
-                // Set current selection
-                std::string cur = "front-left";
-                if (auto* o = m_config->option<ConfigOptionString>("imex_tool_layout")) cur = o->value;
-                for (int i = 0; i < 4; ++i)
-                    if (cur == values[i]) { m_imex_layout_combo->SetSelection(i); break; }
-                m_imex_layout_combo->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent&) {
-                    static const char* layout_vals[] = { "front-left", "front-right", "rear-left", "rear-right" };
-                    int sel = m_imex_layout_combo->GetSelection();
-                    std::string val = (sel >= 0 && sel < 4) ? layout_vals[sel] : "front-left";
-                    m_config->set_key_value("imex_tool_layout", new ConfigOptionString(val));
-                    on_value_change("imex_tool_layout", val);
-                    if (m_imex_modes_ctrl)
-                        m_imex_modes_ctrl->set_grid_size(
-                            m_config->opt_int("imex_tools_per_gantry"),
-                            m_config->opt_int("imex_gantry_count"),
-                            IMEXModesCtrl::parse_layout(val));
-                });
-                auto* s = new wxBoxSizer(wxHORIZONTAL);
-                s->Add(m_imex_layout_combo, 0, wxALIGN_CENTER_VERTICAL);
-                return s;
-            };
-            optgroup->append_line(line);
-        }
-        optgroup->append_single_option_line("imex_nozzle_clearance_x");
-        optgroup->append_single_option_line("imex_nozzle_clearance_y");
-        optgroup->append_single_option_line("imex_carriage_margin");
-
-        {
-            static const wxString theme_choices[] = {
-                _L("Standard"),
-                _L("Deuteranopia / Protanopia (red-green)"),
-                _L("Tritanopia (blue-yellow)"),
-                _L("High Contrast") };
-            static const char* theme_vals[] = { "standard", "deuteranopia", "tritanopia", "high_contrast" };
-            auto opt  = optgroup->get_option("imex_viz_theme");
-            auto line = Line{ opt.opt.label, opt.opt.tooltip };
-            line.append_option(opt);
-            line.widget = [this](wxWindow* parent) -> wxSizer* {
-                m_imex_theme_combo = new ComboBox(parent, wxID_ANY, wxEmptyString,
-                                                  wxDefaultPosition,
-                                                  wxSize(22 * wxGetApp().em_unit(), -1),
-                                                  4, theme_choices, wxCB_READONLY);
-                m_imex_theme_combo->GetDropDown().SetUseContentWidth(true);
-                std::string cur = "standard";
-                if (auto* o = m_config->option<ConfigOptionString>("imex_viz_theme")) cur = o->value;
-                for (int i = 0; i < 4; ++i)
-                    if (cur == theme_vals[i]) { m_imex_theme_combo->SetSelection(i); break; }
-                m_imex_theme_combo->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent&) {
-                    int sel = m_imex_theme_combo->GetSelection();
-                    std::string val = (sel >= 0 && sel < 4) ? theme_vals[sel] : "standard";
-                    m_config->set_key_value("imex_viz_theme", new ConfigOptionString(val));
-                    on_value_change("imex_viz_theme", val);
-                });
-                auto* s = new wxBoxSizer(wxHORIZONTAL);
-                s->Add(m_imex_theme_combo, 0, wxALIGN_CENTER_VERTICAL);
-                return s;
-            };
-            optgroup->append_line(line);
-        }
-
-        {
-            // Parallel modes panel: visual toggle-grid list with + button
-            auto modes_og = page->new_optgroup(L("Parallel Modes"), L"param_advanced");
-            auto line = Line{ L("Modes"), L("") };
-            line.full_width = 1;
-            line.widget = [this](wxWindow* parent) -> wxSizer* {
-                int n_cols = m_config->opt_int("imex_tools_per_gantry");
-                int n_rows = m_config->opt_int("imex_gantry_count");
-                std::string layout_str = "front-left";
-                if (auto* o = m_config->option<ConfigOptionString>("imex_tool_layout")) layout_str = o->value;
-                int layout = IMEXModesCtrl::parse_layout(layout_str);
-                m_imex_modes_ctrl = new IMEXModesCtrl(parent, n_cols, n_rows, layout);
-                m_imex_modes_ctrl->load_from_config(*m_config);
-                m_imex_modes_ctrl->on_change = [this]() {
-                    auto [names, tools, gcodes] = m_imex_modes_ctrl->get_mode_data();
-                    m_config->set_key_value("imex_mode_names",        new ConfigOptionStrings(names));
-                    m_config->set_key_value("imex_mode_active_tools", new ConfigOptionStrings(tools));
-                    m_config->set_key_value("imex_mode_gcodes",       new ConfigOptionStrings(gcodes));
-                    update_dirty();
-                    on_value_change("imex_mode_names", std::string(""));
-                };
-                auto* sizer = new wxBoxSizer(wxHORIZONTAL);
-                sizer->Add(m_imex_modes_ctrl, 1, wxEXPAND);
-                return sizer;
-            };
-            modes_og->append_line(line);
-        }
-
     page = add_options_page(L("Notes"), "custom-gcode_note"); // ORCA: icon only visible on placeholders
         optgroup = page->new_optgroup(L("Notes"), "note", 0);
         option = optgroup->get_option("printer_notes");
@@ -5378,6 +5269,111 @@ if (is_marlin_flavor)
         optgroup->append_single_option_line("machine_load_filament_time", "printer_multimaterial_advanced#filament-load-time");
         optgroup->append_single_option_line("machine_unload_filament_time", "printer_multimaterial_advanced#filament-unload-time");
         optgroup->append_single_option_line("machine_tool_change_time", "printer_multimaterial_advanced#tool-change-time");
+
+        // IDEX/IQEX (IMEX) parallel printing configuration
+        optgroup = page->new_optgroup(L("IDEX/IQEX Configuration"), L"param_advanced");
+        optgroup->append_single_option_line("is_imex");
+        optgroup->append_single_option_line("imex_gantry_count");
+        optgroup->append_single_option_line("imex_tools_per_gantry");
+        {
+            auto opt = optgroup->get_option("imex_tool_layout");
+            auto line = Line{ opt.opt.label, opt.opt.tooltip };
+            line.append_option(opt);
+            line.widget = [this](wxWindow* parent) -> wxSizer* {
+                static const wxString choices[] = {
+                    _L("Front-left"), _L("Front-right"),
+                    _L("Rear-left"), _L("Rear-right")
+                };
+                static const char* values[] = { "front-left", "front-right", "rear-left", "rear-right" };
+                m_imex_layout_combo = new ComboBox(parent, wxID_ANY, wxEmptyString,
+                                                   wxDefaultPosition,
+                                                   wxSize(12 * wxGetApp().em_unit(), -1),
+                                                   4, choices, wxCB_READONLY);
+                m_imex_layout_combo->GetDropDown().SetUseContentWidth(true);
+                std::string cur = "front-left";
+                if (auto* o = m_config->option<ConfigOptionString>("imex_tool_layout")) cur = o->value;
+                for (int i = 0; i < 4; ++i)
+                    if (cur == values[i]) { m_imex_layout_combo->SetSelection(i); break; }
+                m_imex_layout_combo->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent&) {
+                    static const char* layout_vals[] = { "front-left", "front-right", "rear-left", "rear-right" };
+                    int sel = m_imex_layout_combo->GetSelection();
+                    std::string val = (sel >= 0 && sel < 4) ? layout_vals[sel] : "front-left";
+                    m_config->set_key_value("imex_tool_layout", new ConfigOptionString(val));
+                    on_value_change("imex_tool_layout", val);
+                    if (m_imex_modes_ctrl)
+                        m_imex_modes_ctrl->set_grid_size(
+                            m_config->opt_int("imex_tools_per_gantry"),
+                            m_config->opt_int("imex_gantry_count"),
+                            IMEXModesCtrl::parse_layout(val));
+                });
+                auto* s = new wxBoxSizer(wxHORIZONTAL);
+                s->Add(m_imex_layout_combo, 0, wxALIGN_CENTER_VERTICAL);
+                return s;
+            };
+            optgroup->append_line(line);
+        }
+        optgroup->append_single_option_line("imex_nozzle_clearance_x");
+        optgroup->append_single_option_line("imex_nozzle_clearance_y");
+        optgroup->append_single_option_line("imex_carriage_margin");
+        {
+            static const wxString theme_choices[] = {
+                _L("Standard"),
+                _L("Deuteranopia / Protanopia (red-green)"),
+                _L("Tritanopia (blue-yellow)"),
+                _L("High Contrast") };
+            static const char* theme_vals[] = { "standard", "deuteranopia", "tritanopia", "high_contrast" };
+            auto opt  = optgroup->get_option("imex_viz_theme");
+            auto line = Line{ opt.opt.label, opt.opt.tooltip };
+            line.append_option(opt);
+            line.widget = [this](wxWindow* parent) -> wxSizer* {
+                m_imex_theme_combo = new ComboBox(parent, wxID_ANY, wxEmptyString,
+                                                  wxDefaultPosition,
+                                                  wxSize(22 * wxGetApp().em_unit(), -1),
+                                                  4, theme_choices, wxCB_READONLY);
+                m_imex_theme_combo->GetDropDown().SetUseContentWidth(true);
+                std::string cur = "standard";
+                if (auto* o = m_config->option<ConfigOptionString>("imex_viz_theme")) cur = o->value;
+                for (int i = 0; i < 4; ++i)
+                    if (cur == theme_vals[i]) { m_imex_theme_combo->SetSelection(i); break; }
+                m_imex_theme_combo->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent&) {
+                    int sel = m_imex_theme_combo->GetSelection();
+                    std::string val = (sel >= 0 && sel < 4) ? theme_vals[sel] : "standard";
+                    m_config->set_key_value("imex_viz_theme", new ConfigOptionString(val));
+                    on_value_change("imex_viz_theme", val);
+                });
+                auto* s = new wxBoxSizer(wxHORIZONTAL);
+                s->Add(m_imex_theme_combo, 0, wxALIGN_CENTER_VERTICAL);
+                return s;
+            };
+            optgroup->append_line(line);
+        }
+        {
+            auto modes_og = page->new_optgroup(L("IDEX/IQEX Parallel Modes"), L"param_advanced");
+            auto line = Line{ L("Modes"), L("") };
+            line.full_width = 1;
+            line.widget = [this](wxWindow* parent) -> wxSizer* {
+                int n_cols = m_config->opt_int("imex_tools_per_gantry");
+                int n_rows = m_config->opt_int("imex_gantry_count");
+                std::string layout_str = "front-left";
+                if (auto* o = m_config->option<ConfigOptionString>("imex_tool_layout")) layout_str = o->value;
+                int layout = IMEXModesCtrl::parse_layout(layout_str);
+                m_imex_modes_ctrl = new IMEXModesCtrl(parent, n_cols, n_rows, layout);
+                m_imex_modes_ctrl->load_from_config(*m_config);
+                m_imex_modes_ctrl->on_change = [this]() {
+                    auto [names, tools, gcodes] = m_imex_modes_ctrl->get_mode_data();
+                    m_config->set_key_value("imex_mode_names",        new ConfigOptionStrings(names));
+                    m_config->set_key_value("imex_mode_active_tools", new ConfigOptionStrings(tools));
+                    m_config->set_key_value("imex_mode_gcodes",       new ConfigOptionStrings(gcodes));
+                    update_dirty();
+                    on_value_change("imex_mode_names", std::string(""));
+                };
+                auto* sizer = new wxBoxSizer(wxHORIZONTAL);
+                sizer->Add(m_imex_modes_ctrl, 1, wxEXPAND);
+                return sizer;
+            };
+            modes_og->append_line(line);
+        }
+
         m_pages.insert(m_pages.end() - n_after_single_extruder_MM, page);
     }
 
@@ -5735,6 +5731,16 @@ void TabPrinter::toggle_options()
         toggle_option("extruders_count", !bSEMM);
         toggle_option("manual_filament_change", bSEMM);
         toggle_option("purge_in_prime_tower", bSEMM && supports_wipe_tower_2);
+
+        // IDEX/IQEX: show carriage config options only when is_imex is enabled
+        bool is_imex = m_config->opt_bool("is_imex");
+        for (auto el : {"imex_gantry_count", "imex_tools_per_gantry", "imex_tool_layout",
+                        "imex_nozzle_clearance_x", "imex_nozzle_clearance_y",
+                        "imex_carriage_margin", "imex_viz_theme"})
+            toggle_option(el, is_imex);
+        if (m_imex_layout_combo) m_imex_layout_combo->Show(is_imex);
+        if (m_imex_theme_combo)  m_imex_theme_combo->Show(is_imex);
+        if (m_imex_modes_ctrl)   m_imex_modes_ctrl->Show(is_imex);
     }
     wxString extruder_number;
     long val = 1;
