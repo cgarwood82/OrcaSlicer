@@ -4653,17 +4653,34 @@ private:
             sizer->Add(r.name, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
         }
         sizer->Add(grid_panel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
-        sizer->Add(r.gcode,   1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+        sizer->Add(r.gcode,   1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 4);
+
+        // Placeholder search + (for non-primary) delete — stacked vertically
+        auto* btn_col = new wxBoxSizer(wxVERTICAL);
+        wxTextCtrl* gcode_ctrl = r.gcode;
+        auto* ph_btn = new ScalableButton(r.panel, wxID_ANY, "edit", wxEmptyString,
+                                          wxDefaultSize, wxDefaultPosition,
+                                          wxBU_EXACTFIT | wxNO_BORDER, 16);
+        ph_btn->SetToolTip(_L("Edit G-code / browse placeholders"));
+        ph_btn->Bind(wxEVT_BUTTON, [this, gcode_ctrl](wxCommandEvent&) {
+            EditGCodeDialog dlg(this, "imex_mode_gcode", gcode_ctrl->GetValue().ToStdString());
+            if (dlg.ShowModal() == wxID_OK)
+                gcode_ctrl->SetValue(dlg.get_edited_gcode());
+        });
+        btn_col->Add(ph_btn, 0, wxBOTTOM, 2);
 
         if (!is_primary) {
-            auto* rm = new wxButton(r.panel, wxID_ANY, wxT("\u00d7"),
-                                    wxDefaultPosition, wxSize(24, 24), wxBU_EXACTFIT);
+            auto* rm = new ScalableButton(r.panel, wxID_ANY, "imex_remove", wxEmptyString,
+                                          wxDefaultSize, wxDefaultPosition,
+                                          wxBU_EXACTFIT | wxNO_BORDER, 16);
+            rm->SetToolTip(_L("Remove mode"));
             rm->Bind(wxEVT_BUTTON, [this, this_panel](wxCommandEvent&) {
                 remove_row(this_panel);
                 notify();
             });
-            sizer->Add(rm, 0, wxALIGN_CENTER_VERTICAL);
+            btn_col->Add(rm, 0);
         }
+        sizer->Add(btn_col, 0, wxALIGN_CENTER_VERTICAL);
         r.panel->SetSizer(sizer);
 
         m_rows_sizer->Add(r.panel, 0, wxEXPAND | wxBOTTOM, 4);

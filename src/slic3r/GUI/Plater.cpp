@@ -4821,7 +4821,8 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
         "wipe_tower_rotation_angle", "wipe_tower_cone_angle", "wipe_tower_extra_spacing", "wipe_tower_extra_flow", "wipe_tower_max_purge_speed",
         "wipe_tower_wall_type", "wipe_tower_extra_rib_length","wipe_tower_rib_width","wipe_tower_fillet_wall",
         "wipe_tower_filament",
-        "best_object_pos",  "master_extruder_id"
+        "best_object_pos",  "master_extruder_id",
+        "is_imex"
         }))
     , sidebar(new Sidebar(q))
     , notification_manager(std::make_unique<NotificationManager>(q))
@@ -9781,6 +9782,24 @@ void Plater::priv::on_action_slice_plate(SimpleEvent&)
 {
     if (q != nullptr) {
         BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << ":received slice plate event\n" ;
+
+        // iMEX parallel mode + multi-material caution check (current plate only)
+        {
+            PartPlate* plate = partplate_list.get_curr_plate();
+            if (plate && plate->has_imex_multimaterial_conflict()) {
+                int plate_num = partplate_list.get_curr_plate_index() + 1;
+                wxString msg = wxString::Format(
+                    _L("Plate %d has an IDEX/IQEX parallel mode active alongside multi-material objects.\n\n"
+                       "Secondary tool heads operate at the firmware level and may not behave as expected with multi-material prints. "
+                       "Proceed with caution and verify your G-code handles this combination correctly.\n\n"
+                       "Continue slicing?"),
+                    plate_num);
+                MessageDialog dlg(q, msg, _L("IDEX/IQEX Multi-Material Caution"), wxICON_WARNING | wxYES | wxNO);
+                if (dlg.ShowModal() != wxID_YES)
+                    return;
+            }
+        }
+
         //BBS update extruder params and speed table before slicing
         const Slic3r::DynamicPrintConfig& config = wxGetApp().preset_bundle->full_config();
         auto& print = q->get_partplate_list().get_current_fff_print();
@@ -9800,6 +9819,32 @@ void Plater::priv::on_action_slice_all(SimpleEvent&)
 {
     if (q != nullptr) {
         BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << ":received slice project event\n" ;
+
+        // iMEX parallel mode + multi-material caution check (all plates)
+        {
+            std::vector<int> conflict_plates;
+            int plate_count = partplate_list.get_plate_count();
+            for (int i = 0; i < plate_count; ++i) {
+                PartPlate* plate = partplate_list.get_plate(i);
+                if (plate && plate->has_imex_multimaterial_conflict())
+                    conflict_plates.push_back(i + 1); // 1-based for display
+            }
+            if (!conflict_plates.empty()) {
+                wxString plate_list;
+                for (int n : conflict_plates)
+                    plate_list += wxString::Format(" %d", n);
+                wxString msg = wxString::Format(
+                    _L("Plate(s)%s have an IDEX/IQEX parallel mode active alongside multi-material objects.\n\n"
+                       "Secondary tool heads operate at the firmware level and may not behave as expected with multi-material prints. "
+                       "Proceed with caution and verify your G-code handles this combination correctly.\n\n"
+                       "Continue slicing?"),
+                    plate_list);
+                MessageDialog dlg(q, msg, _L("IDEX/IQEX Multi-Material Caution"), wxICON_WARNING | wxYES | wxNO);
+                if (dlg.ShowModal() != wxID_YES)
+                    return;
+            }
+        }
+
         //BBS update extruder params and speed table before slicing
         const Slic3r::DynamicPrintConfig& config = wxGetApp().preset_bundle->full_config();
         auto& print = q->get_partplate_list().get_current_fff_print();
@@ -16180,6 +16225,7 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
 {
     bool update_scheduled = false;
     bool bed_shape_changed = false;
+    bool imex_changed = false;
     //bool print_sequence_changed = false;
     t_config_option_keys diff_keys = p->config->diff(config);
 
@@ -16270,14 +16316,25 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
         }
         // IDEX/IQEX: when is_imex toggles the mode icon needs to be repositioned on every plate.
         // set_shape() short-circuits when the bed geometry is unchanged, so we refresh explicitly.
+        // Defer until after the loop so bed_shape_changed / set_bed_shape() run first if needed.
         else if (opt_key == "is_imex") {
-            p->partplate_list.refresh_imex_icons();
+            imex_changed = true;
             update_scheduled = true;
         }
     }
 
     if (bed_shape_changed)
         set_bed_shape();
+
+    // After any bed-shape or is_imex change, ensure the iMEX mode icon geometry and
+    // raycaster are correct.  set_shape() short-circuits when the bed is unchanged,
+    // so we call refresh_imex_icons() explicitly whenever is_imex is active.
+    // Always done AFTER set_bed_shape() so m_shape is current.
+    if (bed_shape_changed || imex_changed) {
+        auto* is_imex_opt = wxGetApp().preset_bundle->printers.get_edited_preset().config.option<ConfigOptionBool>("is_imex");
+        if (is_imex_opt && is_imex_opt->value)
+            p->partplate_list.refresh_imex_icons();
+    }
 
     config_change_notification(config, std::string("print_sequence"));
 

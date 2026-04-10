@@ -879,8 +879,11 @@ void PartPlate::refresh_imex_icon()
     if (!preset) return;
     bool dual_bbl = preset->is_bbl_vendor() && preset->get_printer_extruder_count() == 2;
     auto* is_imex_opt = preset->printers.get_edited_preset().config.option<ConfigOptionBool>("is_imex");
-    if (is_imex_opt && is_imex_opt->value)
-        calc_vertex_for_icons(dual_bbl ? 7 : 6, m_imex_mode_icon);
+    if (is_imex_opt && is_imex_opt->value) {
+        int imex_slot = dual_bbl ? 7 : 6;
+        calc_vertex_for_icons(imex_slot, m_imex_mode_icon);
+        calc_vertex_for_imex_warn_badge(imex_slot, m_imex_warn_icon);
+    }
 }
 
 // Ensure zone geometry (secondary boxes, collision strips, visual meshes) is up to date.
@@ -918,6 +921,20 @@ bool PartPlate::has_imex_placement_violations()
         }
     }
     return false;
+}
+
+bool PartPlate::has_imex_multimaterial_conflict() const
+{
+    // Condition 1: iMEX is active and the plate mode is non-primary
+    auto* pb = wxGetApp().preset_bundle;
+    if (!pb) return false;
+    auto* is_imex_opt = pb->printers.get_edited_preset().config.option<ConfigOptionBool>("is_imex");
+    if (!is_imex_opt || !is_imex_opt->value) return false;
+    if (get_imex_mode() == "primary") return false;
+
+    // Condition 2: objects on this plate actually use more than one unique filament/extruder
+    std::vector<int> used = get_extruders(true);
+    return used.size() > 1;
 }
 
 void PartPlate::render_imex_zones(bool force_default_color)
@@ -1235,6 +1252,37 @@ void PartPlate::calc_vertex_for_icons(int index, PickingModel &model)
 		BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << "Unable to generate geometry buffers for icons\n";
 
 	init_raycaster_from_model(model);
+}
+
+// Positions the iMEX multi-material warning badge as a small overlay at the bottom-right
+// corner of the iMEX mode icon.  The icon slot index matches the one used in calc_vertex_for_icons.
+void PartPlate::calc_vertex_for_imex_warn_badge(int imex_icon_index, GLModel &model)
+{
+    model.reset();
+
+    auto  bed_ext  = get_extents(m_shape);
+    Vec2d p        = bed_ext[2];
+    auto  factor   = bed_ext.size()(1) / 200.0;
+    float size     = PARTPLATE_ICON_SIZE     * factor;
+    float gap_left = PARTPLATE_ICON_GAP_LEFT * factor;
+    float gap_y    = PARTPLATE_ICON_GAP_Y    * factor;
+    float gap_top  = PARTPLATE_ICON_GAP_TOP  * factor;
+
+    // Centre of the iMEX mode icon (top-left corner = p after offset)
+    p += Vec2d(gap_left, -1 * (imex_icon_index * (size + gap_y) + gap_top));
+
+    // Badge is half the icon size, anchored to the bottom-right corner of the icon slot
+    float badge = size * 0.55f;
+    Vec2d bp(p(0) + size - badge, p(1) - size);
+
+    ExPolygon poly;
+    poly.contour.append({ scale_(bp(0))        , scale_(bp(1))        });
+    poly.contour.append({ scale_(bp(0) + badge), scale_(bp(1))        });
+    poly.contour.append({ scale_(bp(0) + badge), scale_(bp(1) + badge)});
+    poly.contour.append({ scale_(bp(0))        , scale_(bp(1) + badge)});
+
+    if (!init_model_from_poly(model, poly, GROUND_Z + 0.01f))
+        BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << "Unable to generate geometry for iMEX warn badge\n";
 }
 
 /*
@@ -1748,6 +1796,12 @@ void PartPlate::render_icons(bool bottom, bool only_name, int hover_id)
                     } else {
                         render_icon_texture(m_imex_mode_icon.model, m_partplate_list->m_imex_mode_texture);
                     }
+                    // Warning badge: iMEX parallel mode active alongside multi-material objects
+                    if (has_imex_multimaterial_conflict()) {
+                        render_icon_texture(m_imex_warn_icon, m_partplate_list->m_imex_warn_texture);
+                        if (hover_id == (int)PLATE_IMEX_MODE_ID)
+                            show_tooltip(_u8L("Warning: this plate uses a parallel iMEX mode with multi-material objects. Proceed with caution — verify your G-code handles this combination correctly."));
+                    }
                 }
             }
 
@@ -2060,10 +2114,10 @@ void PartPlate::register_raycasters_for_picking(GLCanvas3D &canvas)
     if (dual_bbl)
         register_model_for_picking(canvas, m_plate_filament_map_icon, picking_id_component(PLATE_FILAMENT_MAP_ID));
 
-    // Register IDEX/IQEX mode icon only when IDEX/IQEX is active on the current printer preset.
+    // Register IDEX/IQEX mode icon only when IDEX/IQEX is active and geometry is initialized.
     if (preset) {
         auto* is_imex_opt = preset->printers.get_edited_preset().config.option<ConfigOptionBool>("is_imex");
-        if (is_imex_opt && is_imex_opt->value)
+        if (is_imex_opt && is_imex_opt->value && m_imex_mode_icon.mesh_raycaster)
             register_model_for_picking(canvas, m_imex_mode_icon, picking_id_component(PLATE_IMEX_MODE_ID));
     }
 }
@@ -3753,8 +3807,11 @@ bool PartPlate::set_shape(const Pointfs& shape, const Pointfs& exclude_areas, co
 			calc_vertex_for_icons(dual_bbl ? 6 : 5, m_move_front_icon);
 			{
 				auto* is_imex_opt = preset->printers.get_edited_preset().config.option<ConfigOptionBool>("is_imex");
-				if (is_imex_opt && is_imex_opt->value)
-					calc_vertex_for_icons(dual_bbl ? 7 : 6, m_imex_mode_icon);
+				if (is_imex_opt && is_imex_opt->value) {
+					int imex_slot = dual_bbl ? 7 : 6;
+					calc_vertex_for_icons(imex_slot, m_imex_mode_icon);
+					calc_vertex_for_imex_warn_badge(imex_slot, m_imex_warn_icon);
+				}
 			}
 
 			calc_vertex_for_number(0, false, m_plate_idx_icon);
@@ -4625,6 +4682,14 @@ void PartPlateList::generate_icon_textures()
 		}
 	}
 
+    // iMEX multi-material conflict warning badge
+    {
+        file_name = path + "obj_warning.svg";
+        if (!m_imex_warn_texture.load_from_svg_file(file_name, true, false, false, icon_size)) {
+            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":load file %1% failed (iMEX warn badge)") % file_name;
+        }
+    }
+
     // IDEX/IQEX mode icon textures (fall back gracefully if SVG not present yet)
     {
         file_name = path + (m_is_dark ? "plate_imex_mode_dark.svg" : "plate_imex_mode.svg");
@@ -4684,6 +4749,7 @@ void PartPlateList::release_icon_textures()
 	m_plate_name_edit_hovered_texture.reset();
     m_imex_mode_texture.reset();
     m_imex_mode_hovered_texture.reset();
+    m_imex_warn_texture.reset();
 	for (int i = 0;i < MAX_PLATE_COUNT; i++) {
 		m_idx_textures[i].reset();
 	}

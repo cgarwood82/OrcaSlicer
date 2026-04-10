@@ -156,6 +156,7 @@ private:
     PickingModel m_plate_name_edit_icon;
     PickingModel m_move_front_icon;
     PickingModel m_imex_mode_icon;
+    GLModel      m_imex_warn_icon;   // warning badge: iMEX parallel mode + multi-material conflict
     GLModel m_plate_idx_icon;
     GLTexture m_texture;
 
@@ -195,6 +196,7 @@ private:
     void calc_vertex_for_number(int index, bool one_number, GLModel &buffer);
     void calc_vertex_for_plate_name_edit_icon(GLTexture *texture, int index, PickingModel &model);
     void calc_vertex_for_icons(int index, PickingModel &model);
+    void calc_vertex_for_imex_warn_badge(int imex_icon_index, GLModel &model);
     // void calc_vertex_for_icons_background(int icon_count, GLModel &buffer);
     void render_background(bool force_default_color = false);
     void render_logo(bool bottom, bool render_cali = true);
@@ -454,6 +456,9 @@ public:
     }
     // Returns true if any instance on this plate overlaps an IDEX/IQEX secondary or collision zone.
     bool has_imex_placement_violations();
+    // Returns true when iMEX parallel mode is active (non-primary) AND the plate
+    // has objects assigned to more than one filament — a combination that warrants caution.
+    bool has_imex_multimaterial_conflict() const;
     // Returns the primary-zone bounding box in mm when an IDEX/IQEX parallel mode is active.
     // Empty (nullopt) when IDEX/IQEX is off or the mode is "primary" (full-bed).
     std::optional<BoundingBoxf> imex_primary_zone() { ensure_imex_zones(); return m_imex_primary_zone_box; }
@@ -637,6 +642,7 @@ class PartPlateList : public ObjectBase
     GLTexture m_plate_name_edit_hovered_texture;
     GLTexture m_imex_mode_texture;
     GLTexture m_imex_mode_hovered_texture;
+    GLTexture m_imex_warn_texture;  // warning badge for iMEX + multi-material conflict
     GLTexture m_idx_textures[MAX_PLATE_COUNT];
     // set render option
     bool render_bedtype_logo = true;
