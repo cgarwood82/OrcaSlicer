@@ -31,6 +31,7 @@
 #include <string>
 #include <utility>
 #include <string_view>
+#include <sstream>
 
 #include <regex>
 #include <boost/algorithm/string.hpp>
@@ -2823,6 +2824,58 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     std::vector<unsigned char> is_extruder_used(std::max(size_t(MAXIMUM_EXTRUDER_NUMBER), print.config().filament_diameter.size()), 0);
     for (unsigned int extruder : tool_ordering.all_extruders())
         is_extruder_used[extruder] = true;
+
+    // Orca iMEX: Also mark secondary carriages as used in parallel modes
+    // so is_extruder_used[N] is true for all physical tools in the active mode
+    if (print.config().is_imex.value && !print.objects().empty()) {
+        // Get the active mode for the first plate (all plates should have same mode in a single print)
+        // Assumes all objects share the same mode — validated upstream by the UI
+        const std::string& raw_mode = print.objects().front()->config().imex_parallel_mode.value;
+        std::string active_mode = raw_mode.empty() ? "primary" : raw_mode;
+
+        // Look up the mode's active tools from printer config
+        const auto* mode_names_opt  = print.config().option<ConfigOptionStrings>("imex_mode_names");
+        const auto* tools_opt       = print.config().option<ConfigOptionStrings>("imex_mode_active_tools");
+
+        if (mode_names_opt && tools_opt && !mode_names_opt->values.empty() && !tools_opt->values.empty()) {
+            // Linear scan to find the matching mode (fine for small fixed sets of modes)
+            for (size_t i = 0; i < mode_names_opt->values.size(); ++i) {
+                if (i < tools_opt->values.size() && mode_names_opt->values[i] == active_mode) {
+                    const std::string& active_tools_str = tools_opt->values[i];
+                    // Skip empty tool strings (no active tools in this mode)
+                    if (active_tools_str.empty()) continue;
+
+                    // Parse "idx:P,idx:C,idx:M" format to extract tool indices
+                    std::istringstream ss(active_tools_str);
+                    std::string token;
+                    while (std::getline(ss, token, ',')) {
+                        token.erase(std::remove_if(token.begin(), token.end(), ::isspace), token.end());
+                        if (token.empty()) continue;
+                        try {
+                            auto colon = token.find(':');
+                            int idx;
+                            if (colon != std::string::npos) {
+                                idx = std::stoi(token.substr(0, colon));
+                            } else {
+                                idx = std::stoi(token);
+                            }
+                            // Mark this tool as used (idx is 0-based tool index)
+                            // idx < 0 would require a leading '-' in the string, which would fail stoi first
+                            if (idx >= 0 && idx < (int)is_extruder_used.size()) {
+                                is_extruder_used[idx] = true;
+                            }
+                        } catch (const std::invalid_argument&) {
+                            // not a valid integer token, skip
+                        } catch (const std::out_of_range&) {
+                            // index out of integer range, skip
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
     this->placeholder_parser().set("is_extruder_used", new ConfigOptionBools(is_extruder_used));
 
     {
