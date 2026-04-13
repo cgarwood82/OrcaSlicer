@@ -2391,6 +2391,46 @@ static BambuBedType to_bambu_bed_type(BedType type)
     return bambu_bed_type;
 }
 
+// Orca IMEX: Returns the tool indices active in the current IMEX mode.
+// In copy/mirror parallel modes, secondary carriages (T1-T3) never receive tool-change
+// commands — the firmware mirrors the primary's moves — so they don't appear in
+// tool_ordering.all_extruders(). This helper parses imex_mode_active_tools to enumerate them.
+// Format: "0:P,1:C,2:M,3:M" — only the leading integer index is used.
+static std::vector<int> get_imex_active_tools(const Print& print)
+{
+    std::vector<int> active_tools;
+
+    if (!print.config().is_imex.value || print.objects().empty())
+        return active_tools;
+
+    const std::string& raw_mode = print.objects().front()->config().imex_parallel_mode.value;
+    const std::string  active_mode = raw_mode.empty() ? "primary" : raw_mode;
+
+    const auto* mode_names_opt = print.config().option<ConfigOptionStrings>("imex_mode_names");
+    const auto* tools_opt      = print.config().option<ConfigOptionStrings>("imex_mode_active_tools");
+
+    if (!mode_names_opt || !tools_opt || mode_names_opt->values.empty() || tools_opt->values.empty())
+        return active_tools;
+
+    for (size_t i = 0; i < mode_names_opt->values.size(); ++i) {
+        if (i >= tools_opt->values.size() || mode_names_opt->values[i] != active_mode)
+            continue;
+        std::istringstream ss(tools_opt->values[i]);
+        std::string token;
+        while (std::getline(ss, token, ',')) {
+            token.erase(std::remove_if(token.begin(), token.end(), ::isspace), token.end());
+            if (token.empty()) continue;
+            try {
+                int idx = std::stoi(token); // leading integer before optional ':role' suffix
+                if (idx >= 0 && idx < (int)MAXIMUM_EXTRUDER_NUMBER)
+                    active_tools.push_back(idx);
+            } catch (...) {}
+        }
+        break;
+    }
+    return active_tools;
+}
+
 void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGeneratorCallback thumbnail_cb)
 {
     PROFILE_FUNC();
@@ -2825,56 +2865,13 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     for (unsigned int extruder : tool_ordering.all_extruders())
         is_extruder_used[extruder] = true;
 
-    // Orca iMEX: Also mark secondary carriages as used in parallel modes
-    // so is_extruder_used[N] is true for all physical tools in the active mode
-    if (print.config().is_imex.value && !print.objects().empty()) {
-        // Get the active mode for the first plate (all plates should have same mode in a single print)
-        // Assumes all objects share the same mode — validated upstream by the UI
-        const std::string& raw_mode = print.objects().front()->config().imex_parallel_mode.value;
-        std::string active_mode = raw_mode.empty() ? "primary" : raw_mode;
-
-        // Look up the mode's active tools from printer config
-        const auto* mode_names_opt  = print.config().option<ConfigOptionStrings>("imex_mode_names");
-        const auto* tools_opt       = print.config().option<ConfigOptionStrings>("imex_mode_active_tools");
-
-        if (mode_names_opt && tools_opt && !mode_names_opt->values.empty() && !tools_opt->values.empty()) {
-            // Linear scan to find the matching mode (fine for small fixed sets of modes)
-            for (size_t i = 0; i < mode_names_opt->values.size(); ++i) {
-                if (i < tools_opt->values.size() && mode_names_opt->values[i] == active_mode) {
-                    const std::string& active_tools_str = tools_opt->values[i];
-                    // Skip empty tool strings (no active tools in this mode)
-                    if (active_tools_str.empty()) continue;
-
-                    // Parse "idx:P,idx:C,idx:M" format to extract tool indices
-                    std::istringstream ss(active_tools_str);
-                    std::string token;
-                    while (std::getline(ss, token, ',')) {
-                        token.erase(std::remove_if(token.begin(), token.end(), ::isspace), token.end());
-                        if (token.empty()) continue;
-                        try {
-                            auto colon = token.find(':');
-                            int idx;
-                            if (colon != std::string::npos) {
-                                idx = std::stoi(token.substr(0, colon));
-                            } else {
-                                idx = std::stoi(token);
-                            }
-                            // Mark this tool as used (idx is 0-based tool index)
-                            // idx < 0 would require a leading '-' in the string, which would fail stoi first
-                            if (idx >= 0 && idx < (int)is_extruder_used.size()) {
-                                is_extruder_used[idx] = true;
-                            }
-                        } catch (const std::invalid_argument&) {
-                            // not a valid integer token, skip
-                        } catch (const std::out_of_range&) {
-                            // index out of integer range, skip
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-    }
+    // Orca IMEX: Also mark secondary carriages as used in parallel modes
+    // so is_extruder_used[N] is true for all physical tools in the active mode.
+    // Secondary carriages never appear in tool_ordering.all_extruders() because
+    // the firmware duplicates the primary's moves — no tool-change commands are emitted.
+    for (int tool_idx : get_imex_active_tools(print))
+        if (tool_idx < (int)is_extruder_used.size())
+            is_extruder_used[tool_idx] = true;
 
     this->placeholder_parser().set("is_extruder_used", new ConfigOptionBools(is_extruder_used));
 
@@ -4409,6 +4406,7 @@ std::string GCode::generate_skirt(const Print &print,
 // In non-sequential mode, process_layer is called per each print_z height with all object and support layers accumulated.
 // For multi-material prints, this routine minimizes extruder switches by gathering extruder specific extrusion paths
 // and performing the extruder specific extrusions together.
+
 LayerResult GCode::process_layer(
     const Print                    			&print,
     // Set of object & print layers of the same PrintObject and with the same print_z.
@@ -4559,6 +4557,7 @@ LayerResult GCode::process_layer(
             + "\n";
         config.set_key_value("max_layer_z", new ConfigOptionFloat(m_max_layer_z));
     }
+    
     //BBS: set layer time fan speed after layer change gcode
     gcode += ";_SET_FAN_SPEED_CHANGING_LAYER\n";
 
@@ -4675,16 +4674,31 @@ LayerResult GCode::process_layer(
         gcode += m_writer.set_jerk_xy(m_config.default_jerk.value);
       }
 
-        // Transition from 1st to 2nd layer. Adjust nozzle temperatures as prescribed by the nozzle dependent
-        // nozzle_temperature_initial_layer vs. temperature settings.
-        for (const Extruder& extruder : m_writer.extruders()) {
-            if ((print.config().single_extruder_multi_material.value || m_ooze_prevention.enable) &&
-                extruder.id() != m_writer.filament()->id())
-                // In single extruder multi material mode, set the temperature for the current extruder only.
-                continue;
-            int temperature = print.config().nozzle_temperature.get_at(extruder.id());
-            if (temperature > 0 && temperature != print.config().nozzle_temperature_initial_layer.get_at(extruder.id()))
-                gcode += m_writer.set_temperature(temperature, false, extruder.id());
+        // Transition from 1st to 2nd layer: set non-initial-layer nozzle temperatures.
+        // IMEX parallel modes: secondary carriages (T1-T3) never receive tool-change commands,
+        // so they're not in m_writer.extruders() and multiple_extruders==false (max id==0).
+        // Use the static set_temperature path for IMEX so the T index is always emitted.
+        if (print.config().is_imex.value) {
+            // All active tools need explicit temps — none receive tool-change commands,
+            // so we can't rely on the condition used for non-IMEX (temp != initial_layer_temp).
+            // A tool whose initial and regular temps are the same still needs to be set here.
+            const int num_nozzles = (int)print.config().nozzle_temperature.values.size();
+            for (int tool_idx : get_imex_active_tools(print)) {
+                if (tool_idx >= num_nozzles) continue;
+                int temperature = print.config().nozzle_temperature.values[tool_idx];
+                if (temperature > 0)
+                    gcode += GCodeWriter::set_temperature(temperature, m_writer.config.gcode_flavor, false, tool_idx, "set IMEX tool temperature");
+            }
+        } else {
+            for (const Extruder& extruder : m_writer.extruders()) {
+                if ((print.config().single_extruder_multi_material.value || m_ooze_prevention.enable) &&
+                    extruder.id() != m_writer.filament()->id())
+                    // In single extruder multi material mode, set the temperature for the current extruder only.
+                    continue;
+                int temperature = print.config().nozzle_temperature.get_at(extruder.id());
+                if (temperature > 0 && temperature != print.config().nozzle_temperature_initial_layer.get_at(extruder.id()))
+                    gcode += m_writer.set_temperature(temperature, false, extruder.id());
+            }
         }
 
         // BBS
@@ -7534,6 +7548,7 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
             gcode += this->placeholder_parser_process("filament_start_gcode", filament_start_gcode, new_filament_id, &config);
             check_add_eol(gcode);
         }
+        
         if (m_config.enable_pressure_advance.get_at(new_filament_id)) {
             gcode += m_writer.set_pressure_advance(m_config.pressure_advance.get_at(new_filament_id));
             // Orca: Adaptive PA
@@ -7828,6 +7843,7 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
         }
         check_add_eol(gcode);
     }
+    
     // Set the new extruder to the operating temperature.
     if (m_ooze_prevention.enable)
         gcode += m_ooze_prevention.post_toolchange(*this);

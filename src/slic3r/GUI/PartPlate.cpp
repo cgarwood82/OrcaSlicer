@@ -925,7 +925,7 @@ bool PartPlate::has_imex_placement_violations()
 
 bool PartPlate::has_imex_multimaterial_conflict() const
 {
-    // Condition 1: iMEX is active and the plate mode is non-primary
+    // Condition 1: IMEX is active and the plate mode is non-primary
     auto* pb = wxGetApp().preset_bundle;
     if (!pb) return false;
     auto* is_imex_opt = pb->printers.get_edited_preset().config.option<ConfigOptionBool>("is_imex");
@@ -1254,8 +1254,8 @@ void PartPlate::calc_vertex_for_icons(int index, PickingModel &model)
 	init_raycaster_from_model(model);
 }
 
-// Positions the iMEX multi-material warning badge as a small overlay at the bottom-right
-// corner of the iMEX mode icon.  The icon slot index matches the one used in calc_vertex_for_icons.
+// Positions the IMEX multi-material warning badge as a small overlay at the bottom-right
+// corner of the IMEX mode icon.  The icon slot index matches the one used in calc_vertex_for_icons.
 void PartPlate::calc_vertex_for_imex_warn_badge(int imex_icon_index, GLModel &model)
 {
     model.reset();
@@ -1268,7 +1268,7 @@ void PartPlate::calc_vertex_for_imex_warn_badge(int imex_icon_index, GLModel &mo
     float gap_y    = PARTPLATE_ICON_GAP_Y    * factor;
     float gap_top  = PARTPLATE_ICON_GAP_TOP  * factor;
 
-    // Centre of the iMEX mode icon (top-left corner = p after offset)
+    // Centre of the IMEX mode icon (top-left corner = p after offset)
     p += Vec2d(gap_left, -1 * (imex_icon_index * (size + gap_y) + gap_top));
 
     // Badge is half the icon size, anchored to the bottom-right corner of the icon slot
@@ -1282,7 +1282,7 @@ void PartPlate::calc_vertex_for_imex_warn_badge(int imex_icon_index, GLModel &mo
     poly.contour.append({ scale_(bp(0))        , scale_(bp(1) + badge)});
 
     if (!init_model_from_poly(model, poly, GROUND_Z + 0.01f))
-        BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << "Unable to generate geometry for iMEX warn badge\n";
+        BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << "Unable to generate geometry for IMEX warn badge\n";
 }
 
 /*
@@ -1796,11 +1796,11 @@ void PartPlate::render_icons(bool bottom, bool only_name, int hover_id)
                     } else {
                         render_icon_texture(m_imex_mode_icon.model, m_partplate_list->m_imex_mode_texture);
                     }
-                    // Warning badge: iMEX parallel mode active alongside multi-material objects
+                    // Warning badge: IMEX parallel mode active alongside multi-material objects
                     if (has_imex_multimaterial_conflict()) {
                         render_icon_texture(m_imex_warn_icon, m_partplate_list->m_imex_warn_texture);
                         if (hover_id == (int)PLATE_IMEX_MODE_ID)
-                            show_tooltip(_u8L("Warning: this plate uses a parallel iMEX mode with multi-material objects. Proceed with caution — verify your G-code handles this combination correctly."));
+                            show_tooltip(_u8L("Warning: this plate uses a parallel IMEX mode with multi-material objects. Proceed with caution — verify your G-code handles this combination correctly."));
                     }
                 }
             }
@@ -4682,11 +4682,11 @@ void PartPlateList::generate_icon_textures()
 		}
 	}
 
-    // iMEX multi-material conflict warning badge
+    // IMEX multi-material conflict warning badge
     {
         file_name = path + "obj_warning.svg";
         if (!m_imex_warn_texture.load_from_svg_file(file_name, true, false, false, icon_size)) {
-            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":load file %1% failed (iMEX warn badge)") % file_name;
+            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(":load file %1% failed (IMEX warn badge)") % file_name;
         }
     }
 

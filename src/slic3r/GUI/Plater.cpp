@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <numeric>
 #include <limits>
+#include <sstream>
 #include <vector>
 #include <string>
 #include <regex>
@@ -9778,25 +9779,131 @@ void Plater::priv::on_action_open_project(SimpleEvent&)
 }
 
 //BBS: GUI refactor: slice plate
+// Orca IMEX: Collects all IMEX-related warnings for a plate before slicing.
+// Returns one formatted bullet string per issue. Empty means no concerns.
+// Checks:
+//   1. Multi-material objects alongside a parallel mode (existing badge condition)
+//   2. Bed temperature conflict: primary tool controls the bed; secondary tools warned
+//      if their optimal bed temp differs from the primary's by more than 5°C
+//   3. Filament type mismatch: materials with incompatible requirements
+static std::vector<wxString> collect_imex_warnings(PartPlate* plate)
+{
+    std::vector<wxString> warnings;
+    if (!plate) return warnings;
+
+    // Check 1: multi-material conflict (same condition that drives the badge)
+    if (plate->has_imex_multimaterial_conflict())
+        warnings.push_back(_L("Multi-material objects detected — secondary carriages may not behave as expected with multi-material prints."));
+
+    // Checks 2 & 3 only apply when a non-primary parallel mode is active
+    const std::string mode = plate->get_imex_mode();
+    if (mode == "primary") return warnings;
+
+    PresetBundle* bundle = wxGetApp().preset_bundle;
+    if (!bundle) return warnings;
+
+    // Resolve active tool indices for this mode from printer config
+    const auto& printer_cfg = bundle->printers.get_edited_preset().config;
+    const auto* mode_names_opt = printer_cfg.option<ConfigOptionStrings>("imex_mode_names");
+    const auto* tools_opt      = printer_cfg.option<ConfigOptionStrings>("imex_mode_active_tools");
+
+    // Upper bound: filament_presets.size() is the practical limit, capped at MAXIMUM_EXTRUDER_NUMBER (64)
+    const size_t max_tool = std::min(bundle->filament_presets.size(), MAXIMUM_EXTRUDER_NUMBER);
+
+    std::vector<int> active_tools;
+    if (mode_names_opt && tools_opt) {
+        for (size_t i = 0; i < mode_names_opt->values.size(); ++i) {
+            if (i >= tools_opt->values.size() || mode_names_opt->values[i] != mode) continue;
+            std::istringstream ss(tools_opt->values[i]);
+            std::string token;
+            while (std::getline(ss, token, ',')) {
+                token.erase(std::remove_if(token.begin(), token.end(), ::isspace), token.end());
+                if (token.empty()) continue;
+                try {
+                    int idx = std::stoi(token);
+                    if (idx >= 0 && (max_tool == 0 || (size_t)idx < max_tool))
+                        active_tools.push_back(idx);
+                } catch (...) {}
+            }
+            break;
+        }
+    }
+
+    if (active_tools.size() < 2) return warnings;
+
+    const int primary_tool = active_tools[0];
+    const DynamicPrintConfig& full_cfg = bundle->full_config();
+    // Bed temps are per-plate-type; resolve the active plate's bed type to get the right key.
+    const BedType bed_type = bundle->project_config.opt_enum<BedType>("curr_bed_type");
+    const std::string bed_temp_key = get_bed_temp_key(bed_type);
+    const auto* bed_temps = bed_temp_key.empty() ? nullptr : full_cfg.option<ConfigOptionInts>(bed_temp_key);
+    const auto& filament_presets = bundle->filament_presets;
+
+    // Primary tool's bed temp and filament type
+    const int primary_bed_temp = (bed_temps && primary_tool < (int)bed_temps->values.size())
+                                    ? bed_temps->values[primary_tool] : 0;
+    std::string primary_display_type;
+    if (primary_tool < (int)filament_presets.size()) {
+        Preset* p = bundle->filaments.find_preset(filament_presets[primary_tool]);
+        if (p) p->get_filament_type(primary_display_type);
+    }
+    if (primary_display_type.empty()) primary_display_type = "unknown";
+
+    for (size_t i = 1; i < active_tools.size(); ++i) {
+        const int tool_idx = active_tools[i];
+
+        std::string secondary_display_type;
+        if (tool_idx < (int)filament_presets.size()) {
+            Preset* p = bundle->filaments.find_preset(filament_presets[tool_idx]);
+            if (p) p->get_filament_type(secondary_display_type);
+        }
+        if (secondary_display_type.empty()) secondary_display_type = "unknown";
+
+        // Check 2: bed temperature — primary wins, secondary may not get what it needs
+        if (bed_temps && primary_bed_temp > 0 && tool_idx < (int)bed_temps->values.size()) {
+            const int secondary_bed_temp = bed_temps->values[tool_idx];
+            if (secondary_bed_temp > 0 && std::abs(secondary_bed_temp - primary_bed_temp) > 5) {
+                warnings.push_back(wxString::Format(
+                    _L("Bed temperature conflict: T%d (%s) sets the bed to %d\u00B0C \u2014 "
+                       "T%d (%s) requires %d\u00B0C. The primary tool controls the bed; "
+                       "secondary tools print at whatever temperature it sets."),
+                    primary_tool, primary_display_type, primary_bed_temp,
+                    tool_idx, secondary_display_type, secondary_bed_temp));
+            }
+        }
+
+        // Check 3: filament type mismatch
+        if (primary_display_type != secondary_display_type &&
+            primary_display_type != "unknown" && secondary_display_type != "unknown") {
+            warnings.push_back(wxString::Format(
+                _L("Filament type mismatch: T%d uses %s and T%d uses %s. "
+                   "These materials have incompatible requirements and are not designed to print together."),
+                primary_tool, primary_display_type,
+                tool_idx, secondary_display_type));
+        }
+    }
+
+    return warnings;
+}
+
 void Plater::priv::on_action_slice_plate(SimpleEvent&)
 {
     if (q != nullptr) {
-        BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << ":received slice plate event\n" ;
-
-        // iMEX parallel mode + multi-material caution check (current plate only)
+        // IMEX parallel mode warnings (current plate only)
         {
             PartPlate* plate = partplate_list.get_curr_plate();
-            if (plate && plate->has_imex_multimaterial_conflict()) {
+            std::vector<wxString> warnings = collect_imex_warnings(plate);
+            if (!warnings.empty()) {
                 int plate_num = partplate_list.get_curr_plate_index() + 1;
-                wxString msg = wxString::Format(
-                    _L("Plate %d has an IDEX/IQEX parallel mode active alongside multi-material objects.\n\n"
-                       "Secondary tool heads operate at the firmware level and may not behave as expected with multi-material prints. "
-                       "Proceed with caution and verify your G-code handles this combination correctly.\n\n"
-                       "Continue slicing?"),
-                    plate_num);
-                MessageDialog dlg(q, msg, _L("IDEX/IQEX Multi-Material Caution"), wxICON_WARNING | wxYES | wxNO);
-                if (dlg.ShowModal() != wxID_YES)
+                wxString msg = wxString::Format(_L("Plate %d has IDEX/IQEX parallel mode active with the following concerns:\n\n"), plate_num);
+                for (const wxString& w : warnings)
+                    msg += L"\u2022 " + w + "\n\n";
+                msg += _L("Continue slicing?");
+                MessageDialog dlg(q, msg, _L("IDEX/IQEX Parallel Mode Warning"), wxICON_WARNING | wxYES | wxNO);
+                if (dlg.ShowModal() != wxID_YES) {
+                    q->select_view_3D("3D");
                     return;
+                }
             }
         }
 
@@ -9811,6 +9918,8 @@ void Plater::priv::on_action_slice_plate(SimpleEvent&)
         m_slice_all = false;
         q->reslice();
         q->select_view_3D("Preview");
+        // Regenerate any thumbnails that were wiped by the panel switch above.
+        q->update_all_plate_thumbnails();
     }
 }
 
@@ -9818,30 +9927,30 @@ void Plater::priv::on_action_slice_plate(SimpleEvent&)
 void Plater::priv::on_action_slice_all(SimpleEvent&)
 {
     if (q != nullptr) {
-        BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << ":received slice project event\n" ;
-
-        // iMEX parallel mode + multi-material caution check (all plates)
+        // IMEX parallel mode warnings (all plates)
         {
-            std::vector<int> conflict_plates;
+            wxString combined_msg;
+            std::vector<PartPlate*> warned_plates;
             int plate_count = partplate_list.get_plate_count();
             for (int i = 0; i < plate_count; ++i) {
                 PartPlate* plate = partplate_list.get_plate(i);
-                if (plate && plate->has_imex_multimaterial_conflict())
-                    conflict_plates.push_back(i + 1); // 1-based for display
+                std::vector<wxString> warnings = collect_imex_warnings(plate);
+                if (warnings.empty()) continue;
+                warned_plates.push_back(plate);
+                combined_msg += wxString::Format(_L("Plate %d:\n"), i + 1);
+                for (const wxString& w : warnings)
+                    combined_msg += L"  \u2022 " + w + "\n";
+                combined_msg += "\n";
             }
-            if (!conflict_plates.empty()) {
-                wxString plate_list;
-                for (int n : conflict_plates)
-                    plate_list += wxString::Format(" %d", n);
-                wxString msg = wxString::Format(
-                    _L("Plate(s)%s have an IDEX/IQEX parallel mode active alongside multi-material objects.\n\n"
-                       "Secondary tool heads operate at the firmware level and may not behave as expected with multi-material prints. "
-                       "Proceed with caution and verify your G-code handles this combination correctly.\n\n"
-                       "Continue slicing?"),
-                    plate_list);
-                MessageDialog dlg(q, msg, _L("IDEX/IQEX Multi-Material Caution"), wxICON_WARNING | wxYES | wxNO);
-                if (dlg.ShowModal() != wxID_YES)
+            if (!combined_msg.empty()) {
+                wxString msg = _L("The following IDEX/IQEX parallel mode concerns were detected:\n\n")
+                               + combined_msg
+                               + _L("Continue slicing?");
+                MessageDialog dlg(q, msg, _L("IDEX/IQEX Parallel Mode Warning"), wxICON_WARNING | wxYES | wxNO);
+                if (dlg.ShowModal() != wxID_YES) {
+                    q->select_view_3D("3D");
                     return;
+                }
             }
         }
 
@@ -9861,6 +9970,8 @@ void Plater::priv::on_action_slice_all(SimpleEvent&)
         q->reslice();
         if (!m_is_publishing)
             q->select_view_3D("Preview");
+        // Regenerate any thumbnails that were wiped by the panel switch above.
+        q->update_all_plate_thumbnails();
         //BBS: wish to select all plates stats item
         preview->get_canvas3d()->_update_select_plate_toolbar_stats_item(true);
     }
@@ -13394,7 +13505,6 @@ void Plater::invalid_all_plate_thumbnails()
 {
     if (using_exported_file() || skip_thumbnail_invalid)
         return;
-    BOOST_LOG_TRIVIAL(info) << "thumb: invalid all";
     for (int i = 0; i < get_partplate_list().get_plate_count(); i++) {
         PartPlate* plate = get_partplate_list().get_plate(i);
         plate->thumbnail_data.reset();
@@ -15256,10 +15366,10 @@ int Plater::export_3mf(const boost::filesystem::path& output_path, SaveStrategy 
             ThumbnailData* thumbnail_data = &p->partplate_list.get_plate(i)->thumbnail_data;
             if (p->partplate_list.get_plate(i)->thumbnail_data.is_valid() &&  using_exported_file()) {
                 //no need to generate thumbnail
-                BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": non need to re-generate thumbnail for gcode/exported mode of plate %1%")%i;
+                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": non need to re-generate thumbnail for gcode/exported mode of plate %1%")%i;
             }
             else {
-                BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": re-generate thumbnail for plate %1%") % i;
+                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": re-generate thumbnail for plate %1%") % i;
                 const ThumbnailsParams thumbnail_params = { {}, false, true, true, true, i };
                 p->generate_thumbnail(p->partplate_list.get_plate(i)->thumbnail_data, THUMBNAIL_SIZE_3MF.first, THUMBNAIL_SIZE_3MF.second,
                                     thumbnail_params, Camera::EType::Ortho);
@@ -15269,9 +15379,9 @@ int Plater::export_3mf(const boost::filesystem::path& output_path, SaveStrategy 
             ThumbnailData *no_light_thumbnail_data = &p->partplate_list.get_plate(i)->no_light_thumbnail_data;
             if (p->partplate_list.get_plate(i)->no_light_thumbnail_data.is_valid() && using_exported_file()) {
                 // no need to generate thumbnail
-                BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": non need to re-generate thumbnail for gcode/exported mode of plate %1%") % i;
+                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": non need to re-generate thumbnail for gcode/exported mode of plate %1%") % i;
             } else {
-                BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": re-generate thumbnail for plate %1%") % i;
+                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": re-generate thumbnail for plate %1%") % i;
                 const ThumbnailsParams thumbnail_params = {{}, false, true, true, true, i};
                 p->generate_thumbnail(p->partplate_list.get_plate(i)->no_light_thumbnail_data, THUMBNAIL_SIZE_3MF.first, THUMBNAIL_SIZE_3MF.second, thumbnail_params,
                                       Camera::EType::Ortho,  Camera::ViewAngleType::Iso, false, true);
@@ -15286,10 +15396,10 @@ int Plater::export_3mf(const boost::filesystem::path& output_path, SaveStrategy 
             ThumbnailData* top_thumbnail = &p->partplate_list.get_plate(i)->top_thumbnail_data;
             if (top_thumbnail->is_valid() &&  using_exported_file()) {
                 //no need to generate thumbnail
-                BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": non need to re-generate top_thumbnail for gcode/exported mode of plate %1%")%i;
+                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": non need to re-generate top_thumbnail for gcode/exported mode of plate %1%")%i;
             }
             else {
-                BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": re-generate top_thumbnail for plate %1%") % i;
+                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": re-generate top_thumbnail for plate %1%") % i;
                 const ThumbnailsParams thumbnail_params = { {}, false, true, false, true, i };
                 p->generate_thumbnail(p->partplate_list.get_plate(i)->top_thumbnail_data, THUMBNAIL_SIZE_3MF.first, THUMBNAIL_SIZE_3MF.second, thumbnail_params,
                                       Camera::EType::Ortho, Camera::ViewAngleType::Top_Plate, false);
@@ -15299,10 +15409,10 @@ int Plater::export_3mf(const boost::filesystem::path& output_path, SaveStrategy 
             ThumbnailData* picking_thumbnail = &p->partplate_list.get_plate(i)->pick_thumbnail_data;
             if (picking_thumbnail->is_valid() &&  using_exported_file()) {
                 //no need to generate thumbnail
-                BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": non need to re-generate pick_thumbnail for gcode/exported mode of plate %1%")%i;
+                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": non need to re-generate pick_thumbnail for gcode/exported mode of plate %1%")%i;
             }
             else {
-                BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": re-generate pick_thumbnail for plate %1%") % i;
+                BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": re-generate pick_thumbnail for plate %1%") % i;
                 const ThumbnailsParams thumbnail_params = { {}, false, true, false, true, i };
                 p->generate_thumbnail(p->partplate_list.get_plate(i)->pick_thumbnail_data, THUMBNAIL_SIZE_3MF.first, THUMBNAIL_SIZE_3MF.second, thumbnail_params,
                                       Camera::EType::Ortho, Camera::ViewAngleType::Top_Plate, true,true);
@@ -16326,7 +16436,7 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
     if (bed_shape_changed)
         set_bed_shape();
 
-    // After any bed-shape or is_imex change, ensure the iMEX mode icon geometry and
+    // After any bed-shape or is_imex change, ensure the IMEX mode icon geometry and
     // raycaster are correct.  set_shape() short-circuits when the bed is unchanged,
     // so we call refresh_imex_icons() explicitly whenever is_imex is active.
     // Always done AFTER set_bed_shape() so m_shape is current.
