@@ -9890,7 +9890,7 @@ void Plater::priv::on_action_slice_plate(SimpleEvent&)
 {
     if (q != nullptr) {
         // IMEX parallel mode warnings (current plate only)
-        {
+        if (wxGetApp().app_config->get("imex_pre_slice_warnings") != "false") {
             PartPlate* plate = partplate_list.get_curr_plate();
             std::vector<wxString> warnings = collect_imex_warnings(plate);
             if (!warnings.empty()) {
@@ -9899,8 +9899,12 @@ void Plater::priv::on_action_slice_plate(SimpleEvent&)
                 for (const wxString& w : warnings)
                     msg += L"\u2022 " + w + "\n\n";
                 msg += _L("Continue slicing?");
-                MessageDialog dlg(q, msg, _L("IDEX/IQEX Parallel Mode Warning"), wxICON_WARNING | wxYES | wxNO);
-                if (dlg.ShowModal() != wxID_YES) {
+                RichMessageDialog dlg(q, msg, _L("IDEX/IQEX Parallel Mode Warning"), wxICON_WARNING | wxYES | wxNO);
+                dlg.ShowCheckBox(_L("Don't show these warnings again"));
+                int result = dlg.ShowModal();
+                if (dlg.IsCheckBoxChecked())
+                    wxGetApp().app_config->set("imex_pre_slice_warnings", "false");
+                if (result != wxID_YES) {
                     q->select_view_3D("3D");
                     return;
                 }
@@ -9928,15 +9932,13 @@ void Plater::priv::on_action_slice_all(SimpleEvent&)
 {
     if (q != nullptr) {
         // IMEX parallel mode warnings (all plates)
-        {
+        if (wxGetApp().app_config->get("imex_pre_slice_warnings") != "false") {
             wxString combined_msg;
-            std::vector<PartPlate*> warned_plates;
             int plate_count = partplate_list.get_plate_count();
             for (int i = 0; i < plate_count; ++i) {
                 PartPlate* plate = partplate_list.get_plate(i);
                 std::vector<wxString> warnings = collect_imex_warnings(plate);
                 if (warnings.empty()) continue;
-                warned_plates.push_back(plate);
                 combined_msg += wxString::Format(_L("Plate %d:\n"), i + 1);
                 for (const wxString& w : warnings)
                     combined_msg += L"  \u2022 " + w + "\n";
@@ -9946,8 +9948,12 @@ void Plater::priv::on_action_slice_all(SimpleEvent&)
                 wxString msg = _L("The following IDEX/IQEX parallel mode concerns were detected:\n\n")
                                + combined_msg
                                + _L("Continue slicing?");
-                MessageDialog dlg(q, msg, _L("IDEX/IQEX Parallel Mode Warning"), wxICON_WARNING | wxYES | wxNO);
-                if (dlg.ShowModal() != wxID_YES) {
+                RichMessageDialog dlg(q, msg, _L("IDEX/IQEX Parallel Mode Warning"), wxICON_WARNING | wxYES | wxNO);
+                dlg.ShowCheckBox(_L("Don't show these warnings again"));
+                int result = dlg.ShowModal();
+                if (dlg.IsCheckBoxChecked())
+                    wxGetApp().app_config->set("imex_pre_slice_warnings", "false");
+                if (result != wxID_YES) {
                     q->select_view_3D("3D");
                     return;
                 }

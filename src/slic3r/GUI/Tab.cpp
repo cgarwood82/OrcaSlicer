@@ -5370,6 +5370,25 @@ if (is_marlin_flavor)
         optgroup->append_single_option_line("imex_nozzle_clearance_y");
         optgroup->append_single_option_line("imex_carriage_margin");
         {
+            // Toggle for pre-slice IMEX safety warnings (stored in app_config, not printer profile)
+            auto line = Line{ L("Pre-slice warnings"), L("Show a warning dialog before slicing if IDEX/IQEX parallel mode "
+                                                          "concerns are detected (bed temperature conflicts, filament type "
+                                                          "mismatches, multi-material conflicts). Can be suppressed from the "
+                                                          "dialog itself. Re-enable here if suppressed accidentally.") };
+            line.widget = [](wxWindow* parent) -> wxSizer* {
+                auto* cb = new wxCheckBox(parent, wxID_ANY, wxEmptyString);
+                bool enabled = wxGetApp().app_config->get("imex_pre_slice_warnings") != "false";
+                cb->SetValue(enabled);
+                cb->Bind(wxEVT_CHECKBOX, [cb](wxCommandEvent&) {
+                    wxGetApp().app_config->set("imex_pre_slice_warnings", cb->GetValue() ? "true" : "false");
+                });
+                auto* s = new wxBoxSizer(wxHORIZONTAL);
+                s->Add(cb, 0, wxALIGN_CENTER_VERTICAL);
+                return s;
+            };
+            optgroup->append_line(line);
+        }
+        {
             static const wxString theme_choices[] = {
                 _L("Standard"),
                 _L("Deuteranopia / Protanopia (red-green)"),
