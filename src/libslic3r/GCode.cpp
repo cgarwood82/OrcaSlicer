@@ -3094,9 +3094,11 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     std::string imex_active_mode;
     int         imex_active_mode_index = 0;
     std::string imex_active_mode_gcode;
+    m_imex_parallel_mode.clear();
     if (print.config().is_imex.value && !print.objects().empty()) {
         const std::string& raw = print.objects().front()->config().imex_parallel_mode.value;
         imex_active_mode = raw.empty() ? "primary" : raw;
+        m_imex_parallel_mode = imex_active_mode;
         const auto& mode_names  = print.config().imex_mode_names.values;
         const auto& mode_gcodes = print.config().imex_mode_gcodes.values;
         for (size_t i = 0; i < mode_names.size(); ++i) {
@@ -3161,13 +3163,6 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
             // mark the first filament used in print
             file.write_format(";VT%d\n", initial_extruder_id);
         }
-        // Orca: add missing PA settings for initial filament
-        if (m_config.enable_pressure_advance.get_at(initial_non_support_extruder_id)) {
-            file.write(m_writer.set_pressure_advance(m_config.pressure_advance.get_at(initial_non_support_extruder_id)));
-            // Orca: Adaptive PA
-            // Reset Adaptive PA processor last PA value
-            m_pa_processor->resetPreviousPA(m_config.pressure_advance.get_at(initial_non_support_extruder_id));
-        }
     }
 
     //flush FanMover buffer to avoid modifying the start gcode if it's manual.
@@ -3227,6 +3222,19 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         // Set initial extruder only after custom start G-code.
         // Ugly hack: Do not set the initial extruder if the extruder is primed using the MMU priming towers at the edge of the print bed.
         file.write(this->set_extruder(initial_extruder_id, 0.));
+
+        // IMEX parallel modes only: emit PA for all secondary active tools.
+        // In primary mode, regular tool-change PA handles each tool as it becomes active.
+        // In parallel modes no tool changes occur, so every carriage must be addressed
+        // explicitly here before printing starts.
+        if (!m_imex_parallel_mode.empty() && m_imex_parallel_mode != "primary") {
+            for (int tool_idx : get_imex_active_tools(print)) {
+                if (tool_idx == (int)initial_extruder_id) continue;
+                if (!print.config().enable_pressure_advance.get_at(tool_idx)) continue;
+                file.write(m_writer.set_pressure_advance(
+                    print.config().pressure_advance.get_at(tool_idx), tool_idx));
+            }
+        }
     }
     // BBS: set that indicates objs with brim
     for (auto iter = print.m_brimMap.begin(); iter != print.m_brimMap.end(); ++iter) {
@@ -4678,7 +4686,8 @@ LayerResult GCode::process_layer(
         // IMEX parallel modes: secondary carriages (T1-T3) never receive tool-change commands,
         // so they're not in m_writer.extruders() and multiple_extruders==false (max id==0).
         // Use the static set_temperature path for IMEX so the T index is always emitted.
-        if (print.config().is_imex.value) {
+        // In primary mode, fall through to the standard path — tool changes handle temps normally.
+        if (!m_imex_parallel_mode.empty() && m_imex_parallel_mode != "primary") {
             // All active tools need explicit temps — none receive tool-change commands,
             // so we can't rely on the condition used for non-IMEX (temp != initial_layer_temp).
             // A tool whose initial and regular temps are the same still needs to be set here.
@@ -7550,7 +7559,12 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
         }
         
         if (m_config.enable_pressure_advance.get_at(new_filament_id)) {
-            gcode += m_writer.set_pressure_advance(m_config.pressure_advance.get_at(new_filament_id));
+            // In IMEX parallel modes each carriage needs an explicit tool address.
+            // In primary mode (single active tool) regular tool changes handle PA
+            // so no qualifier is needed — same as a non-IMEX printer.
+            const bool imex_parallel = !m_imex_parallel_mode.empty() && m_imex_parallel_mode != "primary";
+            const int pa_tool = imex_parallel ? (int)new_filament_id : -1;
+            gcode += m_writer.set_pressure_advance(m_config.pressure_advance.get_at(new_filament_id), pa_tool);
             // Orca: Adaptive PA
             // Reset Adaptive PA processor last PA value
             m_pa_processor->resetPreviousPA(m_config.pressure_advance.get_at(new_filament_id));
@@ -7849,7 +7863,9 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
         gcode += m_ooze_prevention.post_toolchange(*this);
 
     if (m_config.enable_pressure_advance.get_at(new_filament_id)) {
-        gcode += m_writer.set_pressure_advance(m_config.pressure_advance.get_at(new_filament_id));
+        const bool imex_parallel = !m_imex_parallel_mode.empty() && m_imex_parallel_mode != "primary";
+        const int pa_tool = imex_parallel ? (int)new_filament_id : -1;
+        gcode += m_writer.set_pressure_advance(m_config.pressure_advance.get_at(new_filament_id), pa_tool);
         // Orca: Adaptive PA
         // Reset Adaptive PA processor last PA value
         m_pa_processor->resetPreviousPA(m_config.pressure_advance.get_at(new_filament_id));

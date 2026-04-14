@@ -592,6 +592,11 @@ private:
     
     std::unique_ptr<AdaptivePAProcessor>      m_pa_processor;
 
+    // IMEX: active parallel mode name ("primary", "copy", "iq-copy", etc.).
+    // Set at the start of export. Empty string means non-IMEX or not yet set.
+    // PA and temperature tool-qualification is only applied when this is not "primary".
+    std::string m_imex_parallel_mode;
+
     std::unique_ptr<WipeTowerIntegration> m_wipe_tower;
 
     std::unique_ptr<SmallAreaInfillFlowCompensator> m_small_area_infill_flow_compensator;
