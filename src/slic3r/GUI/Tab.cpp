@@ -5371,10 +5371,14 @@ if (is_marlin_flavor)
         optgroup->append_single_option_line("imex_carriage_margin");
         {
             // Toggle for pre-slice IMEX safety warnings (stored in app_config, not printer profile)
+            // full_width = 1 is required: widget-only lines (no options) must take the full-width
+            // path in activate_line/append_line to avoid option_set.front() on an empty vector,
+            // which crashes on Windows release builds (ACCESS_VIOLATION at 0x30).
             auto line = Line{ L("Pre-slice warnings"), L("Show a warning dialog before slicing if IDEX/IQEX parallel mode "
                                                           "concerns are detected (bed temperature conflicts, filament type "
                                                           "mismatches, multi-material conflicts). Can be suppressed from the "
                                                           "dialog itself. Re-enable here if suppressed accidentally.") };
+            line.full_width = 1;
             line.widget = [](wxWindow* parent) -> wxSizer* {
                 auto* cb = new wxCheckBox(parent, wxID_ANY, wxEmptyString);
                 bool enabled = wxGetApp().app_config->get("imex_pre_slice_warnings") != "false";
