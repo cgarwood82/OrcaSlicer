@@ -1676,7 +1676,11 @@ void CalibrationPresetPage::update_sync_button_status()
         }
     }
     else {
-        if (abs(curr_obj->GetExtderSystem()->GetNozzleDiameter(0) - get_nozzle_diameter(0)) < EPSILON) {
+        float machine_diameter = curr_obj->GetExtderSystem()->GetNozzleDiameter(0);
+        // Defensive: this wizard is reached only from CalibrationPanel (BBL-only) today, so the guard
+        // fires only during the brief BBL startup window before firmware pushes nozzle info.
+        // If nozzle info isn't reported (0.0 = unknown), treat as synced — there's nothing to compare.
+        if (machine_diameter < 1e-3f || abs(machine_diameter - get_nozzle_diameter(0)) < EPSILON) {
             set_status(true);
         }
         else {
