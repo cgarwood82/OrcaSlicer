@@ -3232,7 +3232,8 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
                 if (tool_idx == (int)initial_extruder_id) continue;
                 if (!print.config().enable_pressure_advance.get_at(tool_idx)) continue;
                 file.write(m_writer.set_pressure_advance(
-                    print.config().pressure_advance.get_at(tool_idx), tool_idx));
+                    print.config().pressure_advance.get_at(tool_idx),
+                    m_config.physical_extruder_map.get_at(tool_idx)));
             }
         }
     }
@@ -4696,7 +4697,8 @@ LayerResult GCode::process_layer(
                 if (tool_idx >= num_nozzles) continue;
                 int temperature = print.config().nozzle_temperature.values[tool_idx];
                 if (temperature > 0)
-                    gcode += GCodeWriter::set_temperature(temperature, m_writer.config.gcode_flavor, false, tool_idx, "set IMEX tool temperature");
+                    gcode += GCodeWriter::set_temperature(temperature, m_writer.config.gcode_flavor, false,
+                        m_config.physical_extruder_map.get_at(tool_idx), "set IMEX tool temperature");
             }
         } else {
             for (const Extruder& extruder : m_writer.extruders()) {
@@ -7563,7 +7565,9 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
             // In primary mode (single active tool) regular tool changes handle PA
             // so no qualifier is needed — same as a non-IMEX printer.
             const bool imex_parallel = !m_imex_parallel_mode.empty() && m_imex_parallel_mode != "primary";
-            const int pa_tool = imex_parallel ? (int)new_filament_id : -1;
+            const int pa_tool = imex_parallel
+                ? m_config.physical_extruder_map.get_at((int)new_filament_id)
+                : -1;
             gcode += m_writer.set_pressure_advance(m_config.pressure_advance.get_at(new_filament_id), pa_tool);
             // Orca: Adaptive PA
             // Reset Adaptive PA processor last PA value
@@ -7864,7 +7868,9 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
 
     if (m_config.enable_pressure_advance.get_at(new_filament_id)) {
         const bool imex_parallel = !m_imex_parallel_mode.empty() && m_imex_parallel_mode != "primary";
-        const int pa_tool = imex_parallel ? (int)new_filament_id : -1;
+        const int pa_tool = imex_parallel
+            ? m_config.physical_extruder_map.get_at((int)new_filament_id)
+            : -1;
         gcode += m_writer.set_pressure_advance(m_config.pressure_advance.get_at(new_filament_id), pa_tool);
         // Orca: Adaptive PA
         // Reset Adaptive PA processor last PA value
