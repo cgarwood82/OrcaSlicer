@@ -596,6 +596,9 @@ private:
     // Set at the start of export. Empty string means non-IMEX or not yet set.
     // PA and temperature tool-qualification is only applied when this is not "primary".
     std::string m_imex_parallel_mode;
+    // IMEX: parsed per-plate head→filament overrides (physical T-index → 1-based filament slot).
+    // Cached from imex_head_filament_map at print start. Empty map means "fall back to pem".
+    std::map<int,int> m_imex_head_filament_map;
 
     std::unique_ptr<WipeTowerIntegration> m_wipe_tower;
 

@@ -963,6 +963,7 @@ static std::vector<std::string> s_Preset_print_options {
      "interlocking_beam", "interlocking_orientation", "interlocking_beam_layer_count", "interlocking_depth", "interlocking_boundary_avoidance", "interlocking_beam_width","calib_flowrate_topinfill_special_order",
      // IDEX/IQEX parallel print mode (per-print selection)
      "imex_parallel_mode",
+     "imex_head_filament_map",
 };
 
 static std::vector<std::string> s_Preset_filament_options {/*"filament_colour", */ "default_filament_colour", "required_nozzle_HRC", "filament_diameter", "pellet_flow_coefficient", "volumetric_speed_coefficients", "filament_type",

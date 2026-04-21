@@ -66,6 +66,7 @@
 #include "libslic3r/SLAPrint.hpp"
 #include "libslic3r/Utils.hpp"
 #include "libslic3r/PresetBundle.hpp"
+#include "libslic3r/IMEXHelpers.hpp"
 #include "libslic3r/ClipperUtils.hpp"
 #include "libslic3r/ObjColorUtils.hpp"
 // For stl export
@@ -91,6 +92,7 @@
 #include "GUI_Preview.hpp"
 #include "3DBed.hpp"
 #include "PartPlate.hpp"
+#include "IMEXFilamentPickerPopover.hpp"
 #include "Camera.hpp"
 #include "Mouse3DController.hpp"
 #include "Tab.hpp"
@@ -9956,14 +9958,18 @@ static std::vector<wxString> collect_imex_warnings(PartPlate* plate)
     const size_t max_tool = std::min(bundle->filament_presets.size(), MAXIMUM_EXTRUDER_NUMBER);
 
     std::vector<int> active_tools;
+    int primary_tool = -1;
     if (mode_names_opt && tools_opt) {
         for (size_t i = 0; i < mode_names_opt->values.size(); ++i) {
             if (i >= tools_opt->values.size() || mode_names_opt->values[i] != mode) continue;
-            std::istringstream ss(tools_opt->values[i]);
+            const std::string& entry = tools_opt->values[i];
+            primary_tool = imex_primary_tool_for_mode(entry);
+            std::istringstream ss(entry);
             std::string token;
             while (std::getline(ss, token, ',')) {
                 token.erase(std::remove_if(token.begin(), token.end(), ::isspace), token.end());
                 if (token.empty()) continue;
+                // std::stoi parses the leading integer and ignores any ":P/:C/:M" suffix.
                 try {
                     int idx = std::stoi(token);
                     if (idx >= 0 && (max_tool == 0 || (size_t)idx < max_tool))
@@ -9974,9 +9980,7 @@ static std::vector<wxString> collect_imex_warnings(PartPlate* plate)
         }
     }
 
-    if (active_tools.size() < 2) return warnings;
-
-    const int primary_tool = active_tools[0];
+    if (active_tools.size() < 2 || primary_tool < 0) return warnings;
     const DynamicPrintConfig& full_cfg = bundle->full_config();
     // Bed temps are per-plate-type; resolve the active plate's bed type to get the right key.
     const BedType bed_type = bundle->project_config.opt_enum<BedType>("curr_bed_type");
@@ -9994,8 +9998,9 @@ static std::vector<wxString> collect_imex_warnings(PartPlate* plate)
     }
     if (primary_display_type.empty()) primary_display_type = "unknown";
 
-    for (size_t i = 1; i < active_tools.size(); ++i) {
+    for (size_t i = 0; i < active_tools.size(); ++i) {
         const int tool_idx = active_tools[i];
+        if (tool_idx == primary_tool) continue;
 
         std::string secondary_display_type;
         if (tool_idx < (int)filament_presets.size()) {
@@ -18004,12 +18009,13 @@ int Plater::select_plate_by_hover_id(int hover_id, bool right_click, bool isModi
                 p->view3D->get_canvas3d()->get_wxglcanvas()->PopupMenu(&menu);
                 ret = 1; // signal to caller: popup was shown, suppress plate context menu
             } else {
-                // Left-click: cycle to next mode.
-                std::string current = curr_plate->get_imex_mode();
-                auto it = std::find(modes.begin(), modes.end(), current);
+                // Left-click: always cycles mode. The IMEX ghost renderer exposes
+                // the per-head filament picker on the plate itself; no popover here.
+                const std::string current_mode = curr_plate->get_imex_mode();
+                auto it = std::find(modes.begin(), modes.end(), current_mode);
                 size_t next_idx = (it == modes.end()) ? 0 : ((it - modes.begin() + 1) % modes.size());
                 std::string next_mode = modes[next_idx];
-                if (next_mode != current) {
+                if (next_mode != current_mode) {
                     take_snapshot("set imex mode");
                     curr_plate->set_imex_mode(next_mode);
                     update_project_dirty_from_presets();
@@ -18532,6 +18538,60 @@ bool Plater::PopupObjectTableBySelection()
 void Plater::update_title_dirty_status()
 {
     p->update_title_dirty_status();
+}
+
+Plater::ImexGhostTooltip Plater::format_imex_ghost_tooltip(int physical_head) const
+{
+    ImexGhostTooltip t{physical_head, -1, GLVolume::UNPRINTABLE_COLOR, {}};
+
+    const PartPlate* plate = p->partplate_list.get_curr_plate();
+    if (!plate) {
+        t.label = "T" + std::to_string(physical_head) + " -> (no plate)";
+        return t;
+    }
+
+    const ConfigOptionInts* pem = wxGetApp().preset_bundle->project_config.option<ConfigOptionInts>("physical_extruder_map");
+    if (!pem || pem->values.size() < 2)
+        pem = wxGetApp().preset_bundle->printers.get_edited_preset().config.option<ConfigOptionInts>("physical_extruder_map");
+
+    const auto map = plate->get_imex_head_filament_map();
+    const int logical = pem ? resolve_filament_for_head(map, *pem, physical_head) : -1;
+    if (logical < 0) {
+        t.label = "T" + std::to_string(physical_head) + " -> (no filament routed)";
+        return t;
+    }
+    t.filament_slot_1based = logical + 1;
+    t.swatch = plate->get_imex_head_filament_color(physical_head);
+    t.swatch.a(1.0f);  // tooltip swatch opaque
+    t.label  = "T" + std::to_string(physical_head) +
+               " -> filament " + std::to_string(t.filament_slot_1based);
+    return t;
+}
+
+void Plater::on_imex_ghost_click(int physical_head)
+{
+    const ConfigOptionInts* pem = wxGetApp().preset_bundle->project_config.option<ConfigOptionInts>("physical_extruder_map");
+    if (!pem || pem->values.size() < 2)
+        pem = wxGetApp().preset_bundle->printers.get_edited_preset().config.option<ConfigOptionInts>("physical_extruder_map");
+    if (!pem) return;
+
+    int lane_count = 0;
+    for (int pv : pem->values) if (pv == physical_head) ++lane_count;
+    if (lane_count < 2) return;  // single-lane head -> click is a no-op, tooltip conveyed status
+
+    PartPlate* plate = p->partplate_list.get_curr_plate();
+    if (!plate) return;
+
+    auto* picker = new IMEXFilamentPickerPopover(
+        p->view3D->get_canvas3d()->get_wxglcanvas(),
+        plate, *pem, physical_head,
+        [this]() {
+            take_snapshot("edit imex head filament");
+            update_project_dirty_from_presets();
+            set_plater_dirty(true);
+            update();
+        });
+    picker->popup_at_cursor();
 }
 
 

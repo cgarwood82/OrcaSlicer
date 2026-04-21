@@ -4483,6 +4483,9 @@ public:
 
     // Parse "idx:P,idx:C,idx:M" → map<tool_idx, state>
     // Backwards compat: plain "idx" (no role) → state 1 (Primary)
+    // Indices are PHYSICAL tool indices (T0..TN-1). all_tool_states preserves
+    // off-grid entries so the tile widget can round-trip indices that fall
+    // outside the currently visible rows × cols without losing data on save.
     static std::map<int,int> parse_tool_states(const std::string& s) {
         std::map<int,int> result;
         if (s.empty()) return result;
@@ -5380,7 +5383,9 @@ if (is_marlin_flavor)
                                                           "dialog itself. Re-enable here if suppressed accidentally.") };
             line.full_width = 1;
             line.widget = [](wxWindow* parent) -> wxSizer* {
-                auto* cb = new wxCheckBox(parent, wxID_ANY, wxEmptyString);
+                // Label belongs on the checkbox itself: full_width=1 (required to
+                // dodge the Windows crash in activate_line) skips Line-title rendering.
+                auto* cb = new wxCheckBox(parent, wxID_ANY, _L("Pre-slice warnings"));
                 bool enabled = wxGetApp().app_config->get("imex_pre_slice_warnings") != "false";
                 cb->SetValue(enabled);
                 cb->Bind(wxEVT_CHECKBOX, [cb](wxCommandEvent&) {

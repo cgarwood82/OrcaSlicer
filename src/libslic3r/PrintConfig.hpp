@@ -1037,6 +1037,10 @@ PRINT_CONFIG_CLASS_DEFINE(
 
     // IDEX/IQEX parallel print mode (per-print selection, stores mode name or "primary")
     ((ConfigOptionString,              imex_parallel_mode))
+    // Per-plate head→filament override for MMU-equipped printers.
+    // Serialized as compact "phys:slot,phys:slot" (1-based filament slots, matches UI).
+    // Empty string means "use first_filament_for_physical_head defaults everywhere".
+    ((ConfigOptionString,              imex_head_filament_map))
 )
 
 // This object is mapped to Perl as Slic3r::Config::PrintRegion.

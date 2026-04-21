@@ -335,6 +335,7 @@ static constexpr const char* OTHER_LAYERS_PRINT_SEQUENCE_ATTR = "other_layers_pr
 static constexpr const char* OTHER_LAYERS_PRINT_SEQUENCE_NUMS_ATTR = "other_layers_print_sequence_nums";
 static constexpr const char* SPIRAL_VASE_MODE = "spiral_mode";
 static constexpr const char* IMEX_PARALLEL_MODE_ATTR = "imex_parallel_mode";
+static constexpr const char* IMEX_HEAD_FILAMENT_MAP_ATTR = "imex_head_filament_map";
 static constexpr const char* FILAMENT_MAP_MODE_ATTR = "filament_map_mode";
 static constexpr const char* FILAMENT_MAP_ATTR = "filament_maps";
 static constexpr const char* LIMIT_FILAMENT_MAP_ATTR = "limit_filament_maps";
@@ -4300,6 +4301,9 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             else if (key == IMEX_PARALLEL_MODE_ATTR) {
                 m_curr_plater->config.set_key_value("imex_parallel_mode", new ConfigOptionString(value));
             }
+            else if (key == IMEX_HEAD_FILAMENT_MAP_ATTR) {
+                m_curr_plater->config.set_key_value("imex_head_filament_map", new ConfigOptionString(value));
+            }
             else if (key == FILAMENT_MAP_MODE_ATTR)
             {
                 FilamentMapMode map_mode = FilamentMapMode::fmmAutoForFlush;
@@ -7789,6 +7793,11 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                     auto* imex_mode_opt = plate_data->config.option<ConfigOptionString>("imex_parallel_mode");
                     if (imex_mode_opt && !imex_mode_opt->value.empty() && imex_mode_opt->value != "primary")
                         stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << IMEX_PARALLEL_MODE_ATTR << "\" " << VALUE_ATTR << "=\"" << imex_mode_opt->value << "\"/>\n";
+                }
+                {
+                    auto* imex_hfm_opt = plate_data->config.option<ConfigOptionString>("imex_head_filament_map");
+                    if (imex_hfm_opt && !imex_hfm_opt->value.empty())
+                        stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << IMEX_HEAD_FILAMENT_MAP_ATTR << "\" " << VALUE_ATTR << "=\"" << imex_hfm_opt->value << "\"/>\n";
                 }
 
                 //filament map related

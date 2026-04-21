@@ -1,9 +1,11 @@
 #ifndef __part_plate_hpp_
 #define __part_plate_hpp_
 
+#include <map>
 #include <vector>
 #include <set>
 #include <array>
+#include <functional>
 #include <optional>
 #include <thread>
 #include <mutex>
@@ -143,7 +145,11 @@ private:
     std::vector<GLModel>       m_imex_collision_overlay;    // red-orange rendered fill for danger strips
     std::vector<GLModel>       m_imex_margin_overlay;       // amber advisory bands just inside collision strips
     std::optional<BoundingBoxf> m_imex_primary_zone_box;   // primary zone extents in mm; empty when IDEX/IQEX is off/primary-only
+    std::map<int, Vec2d> m_imex_head_zone_centers;         // physical-head → zone-center (mm); populated by calc_imex_zones
+    int m_imex_primary_head{ -1 };                         // physical-head index of the primary tool in the active mode; -1 when no mode
     std::string m_imex_zones_mode_cache{ "\x01" }; // cached mode+topology key; sentinel = unbuilt
+    std::vector<std::unique_ptr<GLVolume>> m_imex_ghost_volumes;
+    std::string m_imex_ghost_cache_key{ "\x01" };  // sentinel = unbuilt
     GLModel m_height_limit_common;
     GLModel m_height_limit_bottom;
     GLModel m_height_limit_top;
@@ -191,6 +197,14 @@ private:
     void calc_imex_zones();
     void ensure_imex_zones();
     std::string build_imex_cache_key() const;
+    void calc_imex_ghosts();            // full rebuild
+    void ensure_imex_ghosts();          // cached rebuild on key change
+    std::string build_imex_ghost_cache_key() const;
+    // Resolves the currently-active IMEX mode's tools string + primary physical head.
+    // Plate override wins; else falls back to process preset `imex_parallel_mode`.
+    // Returns false (and leaves outputs untouched) if IMEX is off, mode is empty/"primary",
+    // mode config is missing, the mode isn't listed, or no primary is found.
+    bool resolve_active_mode_tools(std::string& out_tools_str, int& out_primary_phys) const;
     void render_imex_zones(bool force_default_color);
     void refresh_imex_icon();
     void calc_vertex_for_number(int index, bool one_number, GLModel &buffer);
@@ -228,6 +242,23 @@ public:
     static constexpr unsigned int PLATE_FILAMENT_MAP_ID = 8;
     static constexpr unsigned int PLATE_IMEX_MODE_ID = 9;
     static constexpr unsigned int GRABBER_COUNT = 10;
+
+    // Sentinel encoded into GLVolume::composite_id.object_id for IMEX ghost volumes.
+    // Real object_ids are small non-negative ints, so a large-negative base is unambiguous.
+    // physical_head = (sentinel - IMEX_GHOST_COMPOSITE_ID_BASE); valid for 0 <= head < IMEX_GHOST_MAX_HEADS.
+    static constexpr int IMEX_GHOST_COMPOSITE_ID_BASE = -100000;
+    static constexpr int IMEX_GHOST_MAX_HEADS        = 256;
+
+    static bool is_imex_ghost_composite_id(int object_id) {
+        return object_id <= IMEX_GHOST_COMPOSITE_ID_BASE
+            && object_id >  IMEX_GHOST_COMPOSITE_ID_BASE - IMEX_GHOST_MAX_HEADS;
+    }
+    static int  imex_ghost_head_from_composite_id(int object_id) {
+        return IMEX_GHOST_COMPOSITE_ID_BASE - object_id;
+    }
+    static int  imex_ghost_composite_id_for_head(int physical_head) {
+        return IMEX_GHOST_COMPOSITE_ID_BASE - physical_head;
+    }
 
     static ColorRGBA SELECT_COLOR;
     static ColorRGBA UNSELECT_COLOR;
@@ -290,6 +321,34 @@ public:
     std::string get_imex_mode() const;
     void        set_imex_mode(const std::string& mode);
     void        reset_imex_mode();
+
+    // Per-plate head→filament override (PR3b).
+    // Map keys are physical T-indices; values are 1-based filament slots (matches UI numbering).
+    // Empty map = "no overrides stored"; G-code falls back to first_filament_for_physical_head.
+    std::map<int,int> get_imex_head_filament_map() const;
+    void              set_imex_head_filament_map(const std::map<int,int>& m);
+    void              reset_imex_head_filament_map();
+
+    // Returns the RGBA color a ghost rendered for `physical_head` should use,
+    // respecting any imex_head_filament_map override. Falls back to GLVolume::UNPRINTABLE_COLOR
+    // when no filament routes to the head.
+    ColorRGBA get_imex_head_filament_color(int physical_head) const;
+
+    // Visual ghosts of every object on this plate, one per active secondary head.
+    // Non-selectable, non-draggable. See IMEX ghost renderer spec.
+    const std::vector<std::unique_ptr<GLVolume>>& get_imex_ghost_volumes() const {
+        return m_imex_ghost_volumes;
+    }
+
+    // Live-drag path: update ghost transforms only, no factory rebuild.
+    // If `primary_live_xf(obj_idx, inst_idx)` is provided it's consulted for the primary's
+    // transform (e.g. the live GLVolume matrix during gizmo drags); when it returns nullopt
+    // or no lookup is passed, the committed ModelInstance matrix is used.
+    void update_imex_ghost_transforms(
+        const std::function<std::optional<Transform3d>(int, int)>& primary_live_xf = {});
+
+    // Invalidate the ghost cache so the next render_imex_zones() call rebuilds fully.
+    void invalidate_imex_ghosts() { m_imex_ghost_cache_key = "\x01"; }
 
     std::vector<Vec2d> get_plate_wrapping_detection_area() const;
 
@@ -805,6 +864,11 @@ public:
 
     //get the plate counts, not including the invalid plate
     int get_plate_count() const;
+
+    // Invalidate every plate's IMEX ghost cache. Use after any batch mutation
+    // (selection commits, undo/redo) that can move objects between plates or
+    // change per-instance transforms without flowing through set_imex_*.
+    void invalidate_all_imex_ghosts();
 
     //update the plate cols due to plate count change
     void update_plate_cols();

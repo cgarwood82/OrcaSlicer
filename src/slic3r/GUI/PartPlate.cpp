@@ -1,5 +1,6 @@
 #include <cstddef>
 #include <algorithm>
+#include <map>
 #include <numeric>
 #include <vector>
 #include <string>
@@ -24,6 +25,8 @@
 #include "libslic3r/Geometry.hpp"
 #include "libslic3r/Tesselate.hpp"
 #include "libslic3r/GCode/ThumbnailData.hpp"
+#include "libslic3r/IMEXHelpers.hpp"
+#include "libslic3r/Color.hpp"
 #include "libslic3r/Utils.hpp"
 
 #include "I18N.hpp"
@@ -384,6 +387,7 @@ void PartPlate::set_imex_mode(const std::string& mode)
     }
     update_slice_result_valid_state(false);
     m_imex_zones_mode_cache = "\x01"; // force zone rebuild
+    m_imex_ghost_cache_key = "\x01";  // force ghost rebuild
 }
 
 void PartPlate::reset_imex_mode()
@@ -391,6 +395,68 @@ void PartPlate::reset_imex_mode()
     m_config.erase("imex_parallel_mode");
     update_slice_result_valid_state(false);
     m_imex_zones_mode_cache = "\x01";
+    m_imex_ghost_cache_key  = "\x01";
+}
+
+std::map<int,int> PartPlate::get_imex_head_filament_map() const
+{
+    if (!m_config.has("imex_head_filament_map"))
+        return {};
+    auto* opt = m_config.option<ConfigOptionString>("imex_head_filament_map");
+    if (!opt) return {};
+    return parse_imex_head_filament_map(opt->value);
+}
+
+void PartPlate::set_imex_head_filament_map(const std::map<int,int>& m)
+{
+    if (m.empty()) {
+        m_config.erase("imex_head_filament_map");
+    } else {
+        std::ostringstream os;
+        bool first = true;
+        for (const auto& [phys, slot] : m) {
+            if (!first) os << ',';
+            os << phys << ':' << slot;
+            first = false;
+        }
+        m_config.set_key_value("imex_head_filament_map", new ConfigOptionString(os.str()));
+    }
+    update_slice_result_valid_state(false);
+    m_imex_ghost_cache_key = "\x01"; // force ghost rebuild
+}
+
+void PartPlate::reset_imex_head_filament_map()
+{
+    m_config.erase("imex_head_filament_map");
+    update_slice_result_valid_state(false);
+    m_imex_ghost_cache_key = "\x01";
+}
+
+ColorRGBA PartPlate::get_imex_head_filament_color(int physical_head) const
+{
+    auto* pb = wxGetApp().preset_bundle;
+    if (!pb)
+        return GLVolume::UNPRINTABLE_COLOR;
+
+    const ConfigOptionInts* pem = pb->project_config.option<ConfigOptionInts>("physical_extruder_map");
+    if (!pem || pem->values.size() < 2)
+        pem = pb->printers.get_edited_preset().config.option<ConfigOptionInts>("physical_extruder_map");
+    if (!pem)
+        return GLVolume::UNPRINTABLE_COLOR;
+
+    const auto plate_map = get_imex_head_filament_map();
+    const int logical = resolve_filament_for_head(plate_map, *pem, physical_head);
+    if (logical < 0)
+        return GLVolume::UNPRINTABLE_COLOR;
+
+    auto* colours = pb->project_config.option<ConfigOptionStrings>("filament_colour");
+    if (!colours || logical >= (int)colours->values.size())
+        return GLVolume::UNPRINTABLE_COLOR;
+
+    ColorRGBA rgba;
+    if (!decode_color(colours->values[logical], rgba))
+        return GLVolume::UNPRINTABLE_COLOR;
+    return rgba;
 }
 
 void PartPlate::set_spiral_vase_mode(bool spiral_mode, bool as_global)
@@ -494,6 +560,8 @@ void PartPlate::calc_imex_zones()
     m_imex_collision_overlay.clear();
     m_imex_margin_overlay.clear();
     m_imex_primary_zone_box = std::nullopt;
+    m_imex_head_zone_centers.clear();
+    m_imex_primary_head = -1;
 
     if (!wxGetApp().preset_bundle)
         return;
@@ -553,8 +621,10 @@ void PartPlate::calc_imex_zones()
         }
     }
 
-    // Parse "idx:P/C/M" format → map<tool_idx, state>  (1=Primary, 2=Copy, 3=Mirror)
+    // Parse "phys_idx:P/C/M" format → map<phys_idx, state>  (1=Primary, 2=Copy, 3=Mirror)
     // Backwards compat: plain "idx" → Primary
+    // Mode strings use physical T-indices directly (set on the IMEX config tab).
+    // Filament routing is a per-plate concern handled separately via imex_head_filament_map.
     std::map<int,int> tool_states;
     {
         std::istringstream ss(active_tools_str);
@@ -564,17 +634,17 @@ void PartPlate::calc_imex_zones()
             if (token.empty()) continue;
             try {
                 auto colon = token.find(':');
-                int idx, state = 1;
+                int phys_idx, state = 1;
                 if (colon != std::string::npos) {
-                    idx = std::stoi(token.substr(0, colon));
+                    phys_idx = std::stoi(token.substr(0, colon));
                     char role = std::toupper((unsigned char)token[colon + 1]);
                     if (role == 'C') state = 2;
                     else if (role == 'M') state = 3;
                 } else {
-                    idx = std::stoi(token);
+                    phys_idx = std::stoi(token);
                 }
-                if (idx >= 0 && idx < n_rows * n_cols)
-                    tool_states[idx] = state;
+                if (phys_idx >= 0 && phys_idx < n_rows * n_cols)
+                    tool_states[phys_idx] = state;
             } catch (...) {}
         }
     }
@@ -586,7 +656,8 @@ void PartPlate::calc_imex_zones()
 
     // Identify the Primary tool from the mode definition
     for (auto& [idx, state] : tool_states) {
-        if (state == 1) { auto [c, r] = tool_to_phys(idx); pri_col = c; pri_row = r; break; }
+        if (state == 1) { auto [c, r] = tool_to_phys(idx); pri_col = c; pri_row = r;
+            m_imex_primary_head = idx; break; }
     }
 
     // Separate copy and mirror secondary cells using physical coordinates
@@ -633,6 +704,19 @@ void PartPlate::calc_imex_zones()
     // Zone index of the primary tool
     int pri_col_k = col_to_zone.count(pri_col) ? col_to_zone[pri_col] : 0;
     int pri_row_k = row_to_zone.count(pri_row) ? row_to_zone[pri_row] : 0;
+
+    // Zone center per physical head — ghost placement consumes this so that
+    // ghosts land in their own secondary zone instead of stacking on primary.
+    // Every active tool (including primary) gets an entry; ghost offset math is
+    // simply center[head] - center[primary].
+    for (auto& [idx, state] : tool_states) {
+        auto [c, r] = tool_to_phys(idx);
+        int ck = col_to_zone.count(c) ? col_to_zone.at(c) : 0;
+        int rk = row_to_zone.count(r) ? row_to_zone.at(r) : 0;
+        m_imex_head_zone_centers[idx] = Vec2d(
+            x_min + (ck + 0.5) * zone_w,
+            y_min + (rk + 0.5) * zone_h);
+    }
 
     // Separation axes: row-sep = secondaries on a different gantry, col-sep = different column
     bool has_row_sep = false, has_col_sep = false;
@@ -897,6 +981,222 @@ void PartPlate::ensure_imex_zones()
     }
 }
 
+std::string PartPlate::build_imex_ghost_cache_key() const
+{
+    // Ghost shape depends on: mode topology (same inputs as zone key) + pem +
+    // set of objects on plate + each primary instance's transform.
+    std::string k = build_imex_cache_key();
+    if (k.empty()) return "";  // ghost-off when zones-off
+
+    if (auto* pb = wxGetApp().preset_bundle) {
+        const ConfigOptionInts* pem = pb->project_config.option<ConfigOptionInts>("physical_extruder_map");
+        if (!pem || pem->values.size() < 2)
+            pem = pb->printers.get_edited_preset().config.option<ConfigOptionInts>("physical_extruder_map");
+        if (pem) {
+            k += "|pem";
+            for (int v : pem->values) { k += ':'; k += std::to_string(v); }
+        }
+    }
+    k += "|obj";
+    for (const auto& oi : obj_to_instance_set)
+        k += std::to_string(oi.first) + "." + std::to_string(oi.second) + ",";
+    for (const auto& kv : get_imex_head_filament_map())
+        k += "|m" + std::to_string(kv.first) + "=" + std::to_string(kv.second);
+    return k;
+}
+
+void PartPlate::ensure_imex_ghosts()
+{
+    std::string key = build_imex_ghost_cache_key();
+    if (key != m_imex_ghost_cache_key) {
+        m_imex_ghost_cache_key = key;
+        calc_imex_ghosts();
+    }
+}
+
+bool PartPlate::resolve_active_mode_tools(std::string& out_tools_str, int& out_primary_phys) const
+{
+    if (!wxGetApp().preset_bundle) return false;
+    const DynamicPrintConfig& printer_cfg = wxGetApp().preset_bundle->printers.get_edited_preset().config;
+    auto* is_imex_opt = printer_cfg.option<ConfigOptionBool>("is_imex");
+    if (!is_imex_opt || !is_imex_opt->value) return false;
+
+    std::string active_mode = get_imex_mode();
+    if (active_mode == "primary" || active_mode.empty()) {
+        const DynamicPrintConfig& proc_cfg = wxGetApp().preset_bundle->prints.get_edited_preset().config;
+        if (auto* mo = proc_cfg.option<ConfigOptionString>("imex_parallel_mode"))
+            active_mode = mo->value;
+    }
+    if (active_mode.empty() || active_mode == "primary") return false;
+
+    auto* names = printer_cfg.option<ConfigOptionStrings>("imex_mode_names");
+    auto* tools = printer_cfg.option<ConfigOptionStrings>("imex_mode_active_tools");
+    if (!names || !tools) return false;
+    auto it = std::find(names->values.begin(), names->values.end(), active_mode);
+    if (it == names->values.end()) return false;
+    const size_t mode_idx = it - names->values.begin();
+    if (mode_idx >= tools->values.size()) return false;
+
+    const int primary_phys = imex_primary_tool_for_mode(tools->values[mode_idx]);
+    if (primary_phys < 0) return false;
+
+    out_tools_str    = tools->values[mode_idx];
+    out_primary_phys = primary_phys;
+    return true;
+}
+
+void PartPlate::calc_imex_ghosts()
+{
+    m_imex_ghost_volumes.clear();
+    if (!m_plater || !m_model) return;
+    if (obj_to_instance_set.empty()) return;
+
+    std::string active_tools_str;
+    int primary_phys = -1;
+    if (!resolve_active_mode_tools(active_tools_str, primary_phys)) return;
+
+    // Zone centers are the basis for ghost placement; make sure they exist before
+    // we read them. render_imex_zones already ensures this, but ghost rebuild can
+    // also be driven from mode/preset invalidation paths that don't touch zones.
+    ensure_imex_zones();
+
+    const auto heads = parse_imex_active_tools(active_tools_str);
+
+    // Zone centers are the source of truth for ghost placement: they come from the
+    // same grid math that paints the colored secondary zones, so a ghost always lands
+    // in its own tool's zone. extruder_offset is physical-nozzle data and is left at
+    // zero on most IMEX presets — sourcing offsets from it stacks every ghost on top
+    // of the primary, which is what motivated this switch.
+    auto center_for = [&](int phys) -> Vec2d {
+        auto it = m_imex_head_zone_centers.find(phys);
+        return (it == m_imex_head_zone_centers.end()) ? Vec2d::Zero() : it->second;
+    };
+    const Vec2d primary_off = center_for(primary_phys);
+
+    constexpr float GHOST_ALPHA = 0.55f;
+
+    // Mesh is object-local and identical across all instances and heads of a given object.
+    // Build the merged TriangleMesh once per obj_idx and reuse across the inner head loop.
+    // (Per-ghost GLModel::init_from still runs once each, since GLVolume owns its GLModel by value;
+    // sharing a GLModel across GLVolumes would require API changes outside this task's scope.)
+    std::map<int, TriangleMesh> mesh_by_obj;
+    auto get_combined_mesh = [&](int obj_idx, const ModelObject* mo) -> const TriangleMesh& {
+        auto it = mesh_by_obj.find(obj_idx);
+        if (it != mesh_by_obj.end()) return it->second;
+        TriangleMesh combined;
+        for (const ModelVolume* mv : mo->volumes) {
+            if (!mv->is_model_part()) continue;
+            TriangleMesh tm = mv->mesh();
+            tm.transform(mv->get_matrix());
+            combined.merge(tm);
+        }
+        return mesh_by_obj.emplace(obj_idx, std::move(combined)).first->second;
+    };
+
+    for (const auto& oi : obj_to_instance_set) {
+        const int obj_idx  = oi.first;
+        const int inst_idx = oi.second;
+        if (obj_idx < 0 || obj_idx >= (int)m_model->objects.size()) continue;
+        ModelObject* mo = m_model->objects[obj_idx];
+        if (!mo || inst_idx < 0 || inst_idx >= (int)mo->instances.size()) continue;
+        ModelInstance* mi = mo->instances[inst_idx];
+
+        const Transform3d inst_world = mi->get_matrix();
+        const TriangleMesh& combined = get_combined_mesh(obj_idx, mo);
+
+        for (const auto& [phys, role] : heads) {
+            if (phys == primary_phys) continue;
+            if (phys >= IMEX_GHOST_MAX_HEADS) continue;
+
+            const Vec2d gantry = center_for(phys) - primary_off;
+            // Mirror needs the primary instance's origin so the geometric flip happens
+            // about that point instead of the old gantry midplane; Copy ignores it.
+            const Transform3d head_xf = imex_head_transform(
+                primary_phys, phys, role, gantry, inst_world.translation());
+
+            ColorRGBA color = get_imex_head_filament_color(phys);
+            color.a(GHOST_ALPHA);
+
+            auto ghost = std::make_unique<GLVolume>(color);
+            ghost->set_instance_transformation(head_xf * inst_world);
+            ghost->force_transparent    = 1;
+            ghost->force_native_color   = 1;
+            ghost->disabled             = 1;  // skip selection path
+            // is_active defaults to true in GLVolume's ctor — leave it alone.
+            ghost->zoom_to_volumes      = 0;
+            // Ghosts live in secondary zones that are by definition outside the primary
+            // printable area; suppress the red "outside bed" overlay for them.
+            ghost->shader_outside_printer_detection_enabled = 0;
+            ghost->picking              = 1;
+            // object_id = sentinel-encoded physical head; volume_id = source obj_idx (for live-drag);
+            // instance_id = source inst_idx.
+            ghost->composite_id = GLVolume::CompositeID(
+                imex_ghost_composite_id_for_head(phys), obj_idx, inst_idx);
+            ghost->model.init_from(combined);
+            m_imex_ghost_volumes.push_back(std::move(ghost));
+        }
+    }
+}
+
+void PartPlate::update_imex_ghost_transforms(
+    const std::function<std::optional<Transform3d>(int, int)>& primary_live_xf)
+{
+    if (m_imex_ghost_volumes.empty() || !m_plater || !m_model) return;
+
+    std::string active_tools_str;
+    int primary_phys = -1;
+    if (!resolve_active_mode_tools(active_tools_str, primary_phys)) return;
+
+    // Reuse zone-center-derived offsets (same source calc_imex_ghosts uses), so
+    // update and rebuild paths always agree on where each ghost belongs.
+    ensure_imex_zones();
+    auto center_for = [&](int phys) -> Vec2d {
+        auto it = m_imex_head_zone_centers.find(phys);
+        return (it == m_imex_head_zone_centers.end()) ? Vec2d::Zero() : it->second;
+    };
+    const Vec2d primary_off = center_for(primary_phys);
+
+    // Build a phys → role map once so the per-ghost loop is a lookup, not a reparse.
+    std::map<int, ImexRole> role_by_phys;
+    for (const auto& [phys, role] : parse_imex_active_tools(active_tools_str))
+        role_by_phys[phys] = role;
+    auto role_for = [&](int phys) -> ImexRole {
+        auto it = role_by_phys.find(phys);
+        return (it == role_by_phys.end()) ? ImexRole::Copy : it->second;
+    };
+
+    for (auto& ghost : m_imex_ghost_volumes) {
+        const int head = imex_ghost_head_from_composite_id(ghost->composite_id.object_id);
+        const int inst_idx = ghost->composite_id.instance_id;
+        const int obj_idx  = ghost->composite_id.volume_id;  // stashed by calc_imex_ghosts
+        if (obj_idx < 0 || obj_idx >= (int)m_model->objects.size()) continue;
+        const ModelObject* mo = m_model->objects[obj_idx];
+        if (!mo || inst_idx < 0 || inst_idx >= (int)mo->instances.size()) continue;
+
+        // Live-drag path: GLVolume carries the in-progress gizmo transform, while
+        // ModelInstance::get_matrix() only reflects the last committed state. Use
+        // the live lookup when the caller provides it so ghosts track drags frame
+        // by frame instead of snapping on mouse-up.
+        Transform3d primary_xf;
+        if (primary_live_xf) {
+            if (auto live = primary_live_xf(obj_idx, inst_idx))
+                primary_xf = *live;
+            else
+                primary_xf = mo->instances[inst_idx]->get_matrix();
+        } else {
+            primary_xf = mo->instances[inst_idx]->get_matrix();
+        }
+
+        const Vec2d gantry = center_for(head) - primary_off;
+        // Mirror uses primary_xf.translation() as the flip plane anchor so the ghost's
+        // geometry reflects about the primary's current position rather than a fixed
+        // midplane; Copy ignores this argument.
+        const Transform3d head_xf = imex_head_transform(
+            primary_phys, head, role_for(head), gantry, primary_xf.translation());
+        ghost->set_instance_transformation(head_xf * primary_xf);
+    }
+}
+
 bool PartPlate::has_imex_placement_violations()
 {
     ensure_imex_zones();
@@ -943,6 +1243,7 @@ void PartPlate::render_imex_zones(bool force_default_color)
         return;
 
     ensure_imex_zones();
+    ensure_imex_ghosts();
 
     // Read visualization theme from printer config.
     struct IMEXTheme {
@@ -5459,6 +5760,12 @@ int PartPlateList::get_plate_count() const
 	ret = m_plate_list.size();
 
 	return ret;
+}
+
+void PartPlateList::invalidate_all_imex_ghosts()
+{
+    for (PartPlate* p : m_plate_list)
+        if (p) p->invalidate_imex_ghosts();
 }
 
 //update the plate cols due to plate count change

@@ -5555,6 +5555,13 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionString("primary"));
 
+    def = this->add("imex_head_filament_map", coString);
+    def->label = L("IMEX head filament map");
+    def->tooltip = L("Per-plate override mapping physical heads to filament slots "
+                     "(1-based). Empty means use pem-inversion defaults.");
+    def->mode = comDevelop;
+    def->set_default_value(new ConfigOptionString(""));
+
     def = this->add("imex_mode_names", coStrings);
     def->label = L("IDEX/IQEX Mode Names");
     def->tooltip = L("Display names for each user-defined IDEX/IQEX parallel print mode.");

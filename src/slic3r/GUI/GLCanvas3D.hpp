@@ -591,6 +591,9 @@ private:
     //BBS:add plate related logic
     mutable std::vector<int> m_hover_volume_idxs;
     std::vector<int> m_hover_plate_idxs;
+    // IMEX ghost hover state (plate-owned transparent ghost volumes).
+    int m_hover_ghost_head  { -1 };  // physical head index, -1 when not hovering a ghost
+    int m_hover_ghost_plate { -1 };  // plate index for the hovered ghost, -1 when none
     //BBS if explosion_ratio is changed, need to update volume bounding box
     mutable float m_explosion_ratio = 1.0;
     mutable Vec3d m_rotation_center{ 0.0, 0.0, 0.0};
@@ -1067,6 +1070,8 @@ public:
 
     int get_move_volume_id() const { return m_mouse.drag.move_volume_idx; }
     int get_first_hover_volume_idx() const { return m_hover_volume_idxs.empty() ? -1 : m_hover_volume_idxs.front(); }
+    int get_hover_ghost_head()  const { return m_hover_ghost_head; }
+    int get_hover_ghost_plate() const { return m_hover_ghost_plate; }
     void set_selected_extruder(int extruder) { m_selected_extruder = extruder;}
 
     class WipeTowerInfo {
@@ -1230,12 +1235,18 @@ private:
 
     void _picking_pass();
     void _rectangular_selection_picking_pass();
+    // IMEX ghost picking (ray vs. ghost bbox). Runs at the end of _picking_pass.
+    void _picking_pass_imex_ghosts();
     void _render_background();
     void _render_bed(const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, bool show_axes);
     //BBS: add part plate related logic
     void _render_platelist(const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, bool only_current, bool only_body = false, int hover_id = -1, bool render_cali = false, bool show_grid = true);
     //BBS: add outline drawing logic
     void _render_objects(GLVolumeCollection::ERenderType type, bool with_outline = true);
+    // IMEX ghost volumes owned by PartPlate; rendered in the transparent pass.
+    void _render_imex_ghosts();
+    // IMEX ghost hover tooltip: filament swatch + label drawn as an ImGui overlay.
+    void _render_imex_ghost_tooltip();
     //BBS: GUI refactor: add canvas size as parameters
     void _render_gcode(int canvas_width, int canvas_height);
     //BBS: render a plane for assemble
