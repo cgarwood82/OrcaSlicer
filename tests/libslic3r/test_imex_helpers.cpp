@@ -211,43 +211,44 @@ TEST_CASE("imex_head_transform — mirror at origin places ghost at gantry offse
     REQUIRE_THAT(mapped.z(), WithinAbs(0.0,   1e-9));
 }
 
-TEST_CASE("imex_head_transform — mirror flips geometry in-place about primary origin", "[IMEX]") {
-    // Primary sits at (50, 10, 0). Gantry +120 in X → ghost origin at (170, 10, 0),
-    // NOT reflected about a midplane. A model point at +5 X from primary origin ends
-    // up at -5 X from the ghost origin (geometric flip preserved).
-    const Vec2d offset{120.0, 0.0};
-    const Vec3d primary_origin{50.0, 10.0, 0.0};
-    Transform3d xf = imex_head_transform(0, 1, ImexRole::Mirror, offset, primary_origin);
+TEST_CASE("imex_head_transform — mirror lands ghost at reflected position in target zone", "[IMEX]") {
+    // User's example: primary zone is 100x100 centered at (50, 50), primary at (80, 20),
+    // gantry offset (100, 0) places the mirror zone centered at (150, 50). Ghost origin
+    // should land at the reflection of the primary through the zone-boundary plane
+    // (x = 100), i.e. world-space (120, 20, 0) — NOT the Copy-style (180, 20, 0).
+    const Vec2d offset{100.0, 0.0};
+    const Vec2d primary_zone_center{50.0, 50.0};
+    Transform3d xf = imex_head_transform(0, 1, ImexRole::Mirror, offset, primary_zone_center);
 
-    const Vec3d ghost_origin = xf * primary_origin;
-    REQUIRE_THAT(ghost_origin.x(), WithinAbs(170.0, 1e-9)); // 50 + 120 (Copy-style)
-    REQUIRE_THAT(ghost_origin.y(), WithinAbs(10.0,  1e-9));
+    const Vec3d primary{80.0, 20.0, 0.0};
+    const Vec3d ghost_origin = xf * primary;
+    REQUIRE_THAT(ghost_origin.x(), WithinAbs(120.0, 1e-9));
+    REQUIRE_THAT(ghost_origin.y(), WithinAbs(20.0,  1e-9));
 
-    const Vec3d plus5 = primary_origin + Vec3d(5.0, 0.0, 0.0);
-    const Vec3d mapped = xf * plus5;
-    REQUIRE_THAT(mapped.x(), WithinAbs(165.0, 1e-9)); // ghost_origin - 5 (flipped)
-    REQUIRE_THAT(mapped.y(), WithinAbs(10.0,  1e-9));
+    // Model point at primary + (+5 X) lands 5 LEFT of ghost origin (geometry still flipped).
+    const Vec3d mapped = xf * (primary + Vec3d(5.0, 0.0, 0.0));
+    REQUIRE_THAT(mapped.x(), WithinAbs(115.0, 1e-9));
+    REQUIRE_THAT(mapped.y(), WithinAbs(20.0,  1e-9));
 }
 
-TEST_CASE("imex_head_transform — mirror tracks primary motion (same delta as Copy)", "[IMEX]") {
-    // When the primary moves by some delta, the ghost origin must move by the SAME delta
-    // (not the reflected delta). This is the core user requirement: mirrored geometry,
-    // un-mirrored motion.
+TEST_CASE("imex_head_transform — mirror reflects primary drag motion", "[IMEX]") {
+    // Dragging the primary must reflect the ghost across the zone-boundary plane:
+    // primary +X → ghost -X (mirrored), primary +Y → ghost +Y (1:1). Without this the
+    // ghost stops being a true mirror once the primary moves.
     const Vec2d offset{120.0, 0.0};
-    const Vec3d p0{0.0, 0.0, 0.0};
-    const Vec3d p1{30.0, -5.0, 0.0};
+    const Vec2d primary_zone_center{60.0, 50.0};
+    Transform3d xf = imex_head_transform(0, 1, ImexRole::Mirror, offset, primary_zone_center);
 
-    Transform3d xf0 = imex_head_transform(0, 1, ImexRole::Mirror, offset, p0);
-    Transform3d xf1 = imex_head_transform(0, 1, ImexRole::Mirror, offset, p1);
-
-    const Vec3d ghost0 = xf0 * p0;
-    const Vec3d ghost1 = xf1 * p1;
-    const Vec3d ghost_delta = ghost1 - ghost0;
+    const Vec3d p0{10.0, 20.0, 0.0};
+    const Vec3d p1{40.0, 15.0, 0.0};
+    const Vec3d ghost0 = xf * p0;
+    const Vec3d ghost1 = xf * p1;
+    const Vec3d ghost_delta   = ghost1 - ghost0;
     const Vec3d primary_delta = p1 - p0;
 
-    REQUIRE_THAT(ghost_delta.x(), WithinAbs(primary_delta.x(), 1e-9));
-    REQUIRE_THAT(ghost_delta.y(), WithinAbs(primary_delta.y(), 1e-9));
-    REQUIRE_THAT(ghost_delta.z(), WithinAbs(primary_delta.z(), 1e-9));
+    REQUIRE_THAT(ghost_delta.x(), WithinAbs(-primary_delta.x(), 1e-9)); // X inverted
+    REQUIRE_THAT(ghost_delta.y(), WithinAbs( primary_delta.y(), 1e-9)); // Y 1:1
+    REQUIRE_THAT(ghost_delta.z(), WithinAbs( primary_delta.z(), 1e-9));
 }
 
 TEST_CASE("imex_head_transform — mirror reflects model point across primary origin", "[IMEX]") {

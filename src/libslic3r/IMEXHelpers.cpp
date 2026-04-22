@@ -167,7 +167,7 @@ int resolve_filament_for_head(const std::map<int,int>& plate_map,
 
 Transform3d imex_head_transform(int /*primary*/, int /*target*/, ImexRole role,
                                 const Vec2d& gantry_offset,
-                                const Vec3d& primary_origin)
+                                const Vec2d& primary_zone_center)
 {
     switch (role) {
     case ImexRole::Primary:
@@ -179,29 +179,22 @@ Transform3d imex_head_transform(int /*primary*/, int /*target*/, ImexRole role,
         const double len2 = gantry_offset.squaredNorm();
         if (len2 < 1e-12)
             return Transform3d::Identity();
-        // Reflection plane normal is the primary-row gantry axis (X for all
-        // current IMEX printers), not gantry_offset.normalized(). An off-row
-        // Mirror target (e.g. T3 on a 2x2 where primary is T0) has a diagonal
-        // gantry_offset; reflecting across that diagonal plane rotates the
-        // ghost ~45° in plan view, which visually reads as the object laying
-        // on its side. All Mirror ghosts must flip across the same plane
-        // (the one the primary-row Primary↔Mirror pair defines), so that
-        // off-row mirrors look like their on-row counterparts, just placed
-        // at the off-row position.
-        // Formula: head_xf = T(gantry) * T(p) * Reflect(n) * T(-p)
-        //   .linear()      = Reflect(n) = I - 2 n n^T
-        //   .translation() = gantry + (I - Reflect) * p = gantry + 2 n n^T p
-        // TODO: if a future IMEX printer has Y-oriented gantries, lift this
-        // to a caller-supplied axis.
-        const Vec3d n(1.0, 0.0, 0.0);
-        Eigen::Matrix3d I3 = Eigen::Matrix3d::Identity();
-        Eigen::Matrix3d nnT = n * n.transpose();
-        Eigen::Matrix3d L = I3 - 2.0 * nnT;
-        Vec3d t = Vec3d(gantry_offset.x(), gantry_offset.y(), 0.0)
-                  + (I3 - L) * primary_origin;
+        // True reflection about the zone-boundary plane (perpendicular to X, passing
+        // through primary_zone_center.x + gantry_offset.x/2). This makes the ghost
+        // land at the mirrored position within the target zone — matching where the
+        // mirror tool will actually print — and reflects drag motion so X is inverted
+        // while Y translates 1:1 by gantry_offset.y. Off-row Mirror targets (e.g. T3
+        // on a 2x2) still reflect across this X-plane rather than the diagonal, so
+        // they visually match their on-row counterparts.
+        //   .linear()      = Reflect(X) = diag(-1, 1, 1)
+        //   .translation() = (2*primary_zone_center.x + gantry_offset.x, gantry_offset.y, 0)
+        // TODO: if a future IMEX printer has Y-oriented gantries, lift this to a
+        // caller-supplied axis.
         Transform3d out = Transform3d::Identity();
-        out.linear() = L;
-        out.translation() = t;
+        out.linear()      = Eigen::DiagonalMatrix<double, 3>(-1.0, 1.0, 1.0);
+        out.translation() = Vec3d(2.0 * primary_zone_center.x() + gantry_offset.x(),
+                                  gantry_offset.y(),
+                                  0.0);
         return out;
     }
     }

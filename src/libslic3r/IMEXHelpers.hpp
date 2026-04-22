@@ -91,18 +91,22 @@ std::vector<std::pair<int, ImexRole>> parse_imex_active_tools(const std::string&
 // World-space transform composed as `head_xf * primary_instance_world` to place a ghost
 // copy of the primary into `target`'s frame under `role`.
 // `gantry_offset` = center_for(target) - center_for(primary) (XY, in mm).
-// `primary_origin` = world-space translation of the primary instance (use its matrix's
-//   translation column). Only consulted for Mirror; Copy/Primary ignore it.
+// `primary_zone_center` = XY center of the primary head's zone in world coords. Only
+//   consulted for Mirror; Copy/Primary ignore it.
 // Copy:    pure translation by gantry_offset. Ghost tracks primary 1:1 during drag.
-// Mirror:  translate by gantry_offset (Copy-style placement AND motion), then flip the
-//          ghost's geometry about a plane through primary_origin whose normal is the
-//          primary-row gantry axis (X for all current IMEX printers), NOT the gantry_offset
-//          direction. This keeps off-row Mirror ghosts (e.g. T3 on a 2x2) reflected across
-//          the same plane as on-row mirrors (e.g. T1), just placed at the off-row position.
+// Mirror:  true reflection about the zone-boundary plane between primary and target.
+//          The plane is perpendicular to the primary-row gantry axis (X for all current
+//          IMEX printers) and passes through `primary_zone_center.x + gantry_offset.x / 2`.
+//          Ghost origin lands at the mirrored position within the target zone (matches
+//          where the mirror tool will actually print), and primary drag reflects across
+//          that plane so the ghost's X moves opposite the primary's X while Y tracks 1:1
+//          — i.e. the ghost stays a true mirror as you drag. Geometry is X-flipped
+//          regardless of gantry_offset direction so off-row Mirror targets (e.g. T3 on
+//          a 2x2) reflect across the same plane as on-row peers.
 //          Zero-length gantry_offset degenerates to identity.
 // Primary: identity.
 Transform3d imex_head_transform(int primary, int target, ImexRole role,
                                 const Vec2d& gantry_offset,
-                                const Vec3d& primary_origin = Vec3d::Zero());
+                                const Vec2d& primary_zone_center = Vec2d::Zero());
 
 } // namespace Slic3r

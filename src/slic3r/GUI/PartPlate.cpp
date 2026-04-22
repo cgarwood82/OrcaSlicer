@@ -1092,10 +1092,11 @@ void PartPlate::calc_imex_ghosts()
             if (phys >= IMEX_GHOST_MAX_HEADS) continue;
 
             const Vec2d gantry = center_for(phys) - primary_off;
-            // Mirror needs the primary instance's origin so the geometric flip happens
-            // about that point instead of the old gantry midplane; Copy ignores it.
+            // Mirror reflects about the zone-boundary plane through the primary zone
+            // center, so the ghost lands at the mirrored position within the target
+            // zone and drag motion inverts X while Y tracks 1:1. Copy ignores it.
             const Transform3d head_xf = imex_head_transform(
-                primary_phys, phys, role, gantry, inst_world.translation());
+                primary_phys, phys, role, gantry, primary_off);
 
             ColorRGBA color = get_imex_head_filament_color(phys);
             color.a(GHOST_ALPHA);
@@ -1171,11 +1172,11 @@ void PartPlate::update_imex_ghost_transforms(
         }
 
         const Vec2d gantry = center_for(head) - primary_off;
-        // Mirror uses primary_xf.translation() as the flip plane anchor so the ghost's
-        // geometry reflects about the primary's current position rather than a fixed
-        // midplane; Copy ignores this argument.
+        // Mirror reflects about the zone-boundary plane through the primary zone
+        // center, so the ghost lands at the mirrored position within the target
+        // zone and drag motion inverts X while Y tracks 1:1. Copy ignores it.
         const Transform3d head_xf = imex_head_transform(
-            primary_phys, head, role_for(head), gantry, primary_xf.translation());
+            primary_phys, head, role_for(head), gantry, primary_off);
         ghost->set_instance_transformation(head_xf * primary_xf);
     }
 }
