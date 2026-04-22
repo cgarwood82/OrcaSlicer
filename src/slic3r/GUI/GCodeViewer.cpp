@@ -10,6 +10,7 @@
 #include "libslic3r/Utils.hpp"
 #include "libslic3r/LocalesUtils.hpp"
 #include "libslic3r/PresetBundle.hpp"
+#include "libslic3r/IMEXHelpers.hpp"
 //BBS: add convex hull logic for toolpath check
 #include "libslic3r/Geometry/ConvexHull.hpp"
 
@@ -1558,35 +1559,26 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
                     imex_box_wx = wx_opt ? (float)wx_opt->value : 30.0f;
                     imex_box_wy = wy_opt ? (float)wy_opt->value : 30.0f;
 
-                    // Parse "idx:P/C/M" format — matches PartPlate::calc_imex_zones() exactly.
-                    // Primary = state 1 (P), Copy = 2 (C), Mirror = 3 (M).
-                    // Inactive tools (state 0) are not included in the stored string.
+                    // Parse "idx:P/C/M" via shared helpers — matches PartPlate::calc_imex_zones.
+                    // Secondary state is 2=Copy / 3=Mirror to match the legacy encoding used
+                    // downstream for marker color selection.
                     int pri_tool = -1;
                     std::vector<int> sec_tool_ids;
                     std::map<int,int> sec_tool_states; // tool_id -> 2=Copy, 3=Mirror
                     if (mode_names_opt && active_tools_opt) {
                         for (size_t i = 0; i < mode_names_opt->values.size(); ++i) {
                             if (i < active_tools_opt->values.size() && mode_names_opt->values[i] == mode) {
-                                std::istringstream ss(active_tools_opt->values[i]);
-                                std::string tok;
-                                while (std::getline(ss, tok, ',')) {
-                                    tok.erase(std::remove_if(tok.begin(), tok.end(), ::isspace), tok.end());
-                                    if (tok.empty()) continue;
-                                    try {
-                                        auto colon = tok.find(':');
-                                        int idx = std::stoi(tok.substr(0, colon != std::string::npos ? colon : tok.size()));
-                                        int state = 1; // default: primary
-                                        if (colon != std::string::npos) {
-                                            char role = std::toupper((unsigned char)tok[colon + 1]);
-                                            if (role == 'C') state = 2;
-                                            else if (role == 'M') state = 3;
-                                        }
-                                        if (state == 1) pri_tool = idx;
-                                        else {
-                                            sec_tool_ids.push_back(idx);
-                                            sec_tool_states[idx] = state;
-                                        }
-                                    } catch (...) {}
+                                const std::string& entry = active_tools_opt->values[i];
+                                pri_tool = imex_primary_tool_for_mode(entry);
+                                for (const auto& [phys_idx, role] : parse_imex_active_tools(entry)) {
+                                    if (phys_idx < 0 || phys_idx == pri_tool) continue;
+                                    if (role == ImexRole::Mirror) {
+                                        sec_tool_ids.push_back(phys_idx);
+                                        sec_tool_states[phys_idx] = 3;
+                                    } else if (role == ImexRole::Copy) {
+                                        sec_tool_ids.push_back(phys_idx);
+                                        sec_tool_states[phys_idx] = 2;
+                                    }
                                 }
                                 break;
                             }

@@ -621,31 +621,21 @@ void PartPlate::calc_imex_zones()
         }
     }
 
-    // Parse "phys_idx:P/C/M" format → map<phys_idx, state>  (1=Primary, 2=Copy, 3=Mirror)
-    // Backwards compat: plain "idx" → Primary
-    // Mode strings use physical T-indices directly (set on the IMEX config tab).
-    // Filament routing is a per-plate concern handled separately via imex_head_filament_map.
+    // Parse "phys_idx:P/C/M" format → map<phys_idx, state>  (1=Primary, 2=Copy, 3=Mirror).
+    // imex_primary_tool_for_mode handles the Primary slot (bare legacy token → Primary);
+    // parse_imex_active_tools fills in the Copy/Mirror secondaries. Mode strings use
+    // physical T-indices directly; filament routing is separate (imex_head_filament_map).
     std::map<int,int> tool_states;
     {
-        std::istringstream ss(active_tools_str);
-        std::string token;
-        while (std::getline(ss, token, ',')) {
-            token.erase(std::remove_if(token.begin(), token.end(), ::isspace), token.end());
-            if (token.empty()) continue;
-            try {
-                auto colon = token.find(':');
-                int phys_idx, state = 1;
-                if (colon != std::string::npos) {
-                    phys_idx = std::stoi(token.substr(0, colon));
-                    char role = std::toupper((unsigned char)token[colon + 1]);
-                    if (role == 'C') state = 2;
-                    else if (role == 'M') state = 3;
-                } else {
-                    phys_idx = std::stoi(token);
-                }
-                if (phys_idx >= 0 && phys_idx < n_rows * n_cols)
-                    tool_states[phys_idx] = state;
-            } catch (...) {}
+        const int primary = imex_primary_tool_for_mode(active_tools_str);
+        if (primary >= 0 && primary < n_rows * n_cols)
+            tool_states[primary] = 1;
+        for (const auto& [phys_idx, role] : parse_imex_active_tools(active_tools_str)) {
+            if (phys_idx < 0 || phys_idx >= n_rows * n_cols) continue;
+            if (phys_idx == primary) continue;
+            if      (role == ImexRole::Mirror) tool_states[phys_idx] = 3;
+            else if (role == ImexRole::Copy)   tool_states[phys_idx] = 2;
+            // Extra ImexRole::Primary entries beyond the first are ignored.
         }
     }
 

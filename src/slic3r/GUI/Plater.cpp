@@ -9964,17 +9964,10 @@ static std::vector<wxString> collect_imex_warnings(PartPlate* plate)
             if (i >= tools_opt->values.size() || mode_names_opt->values[i] != mode) continue;
             const std::string& entry = tools_opt->values[i];
             primary_tool = imex_primary_tool_for_mode(entry);
-            std::istringstream ss(entry);
-            std::string token;
-            while (std::getline(ss, token, ',')) {
-                token.erase(std::remove_if(token.begin(), token.end(), ::isspace), token.end());
-                if (token.empty()) continue;
-                // std::stoi parses the leading integer and ignores any ":P/:C/:M" suffix.
-                try {
-                    int idx = std::stoi(token);
-                    if (idx >= 0 && (max_tool == 0 || (size_t)idx < max_tool))
-                        active_tools.push_back(idx);
-                } catch (...) {}
+            for (const auto& [phys_idx, role] : parse_imex_active_tools(entry)) {
+                (void)role;
+                if (phys_idx >= 0 && (max_tool == 0 || (size_t)phys_idx < max_tool))
+                    active_tools.push_back(phys_idx);
             }
             break;
         }
