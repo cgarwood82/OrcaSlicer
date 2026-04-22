@@ -13,6 +13,42 @@ static ConfigOptionInts make_pem(std::vector<int> v) {
     return o;
 }
 
+TEST_CASE("effective_physical_extruder_map — explicit wins", "[IMEX]") {
+    auto explicit_pem = make_pem({0, 0, 0, 0, 1, 2, 3});
+    auto pei          = make_pem({1, 2, 3, 4}); // would derive to {0,1,2,3}
+    auto out = effective_physical_extruder_map(&explicit_pem, &pei);
+    REQUIRE(out.values == std::vector<int>{0, 0, 0, 0, 1, 2, 3});
+}
+
+TEST_CASE("effective_physical_extruder_map — default pem falls back to pei derive", "[IMEX]") {
+    auto default_pem = make_pem({0});           // size 1, the PrintConfig default
+    auto pei         = make_pem({1, 2});        // 1-indexed IDEX
+    auto out = effective_physical_extruder_map(&default_pem, &pei);
+    REQUIRE(out.values == std::vector<int>{0, 1}); // 1-indexed → 0-indexed
+}
+
+TEST_CASE("effective_physical_extruder_map — null explicit, pei present", "[IMEX]") {
+    auto pei = make_pem({1, 2, 3});
+    auto out = effective_physical_extruder_map(nullptr, &pei);
+    REQUIRE(out.values == std::vector<int>{0, 1, 2});
+}
+
+TEST_CASE("effective_physical_extruder_map — both absent yields empty", "[IMEX]") {
+    auto out = effective_physical_extruder_map(nullptr, nullptr);
+    REQUIRE(out.values.empty());
+}
+
+TEST_CASE("effective_physical_extruder_map — IDEX ghost-color regression guard", "[IMEX]") {
+    // Printer with printer_extruder_id = [1, 2] and no explicit pem (default {0}).
+    // Before the GUI fix, this scenario produced a black ghost on T1 because
+    // first_filament_for_physical_head({0}, 1) == -1.
+    auto default_pem = make_pem({0});
+    auto pei         = make_pem({1, 2});
+    auto pem         = effective_physical_extruder_map(&default_pem, &pei);
+    REQUIRE(first_filament_for_physical_head(pem, 0) == 0);
+    REQUIRE(first_filament_for_physical_head(pem, 1) == 1); // no longer -1
+}
+
 TEST_CASE("first_filament_for_physical_head — identity pem", "[IMEX]") {
     auto pem = make_pem({0, 1, 2, 3});
     REQUIRE(first_filament_for_physical_head(pem, 0) == 0);

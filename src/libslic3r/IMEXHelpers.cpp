@@ -6,7 +6,32 @@
 #include <sstream>
 #include <unordered_set>
 
+#include "libslic3r/PresetBundle.hpp"
+
 namespace Slic3r {
+
+ConfigOptionInts effective_physical_extruder_map(const ConfigOptionInts* explicit_pem,
+                                                  const ConfigOptionInts* printer_extruder_id)
+{
+    if (explicit_pem && explicit_pem->values.size() >= 2)
+        return *explicit_pem;
+    ConfigOptionInts derived;
+    if (printer_extruder_id) {
+        derived.values.reserve(printer_extruder_id->values.size());
+        for (int v : printer_extruder_id->values)
+            derived.values.push_back(v - 1);
+    }
+    return derived;
+}
+
+ConfigOptionInts effective_physical_extruder_map(const PresetBundle& pb)
+{
+    const ConfigOptionInts* explicit_pem = pb.project_config.option<ConfigOptionInts>("physical_extruder_map");
+    if (!explicit_pem || explicit_pem->values.size() < 2)
+        explicit_pem = pb.printers.get_edited_preset().config.option<ConfigOptionInts>("physical_extruder_map");
+    const ConfigOptionInts* pei = pb.printers.get_edited_preset().config.option<ConfigOptionInts>("printer_extruder_id");
+    return effective_physical_extruder_map(explicit_pem, pei);
+}
 
 int first_filament_for_physical_head(const ConfigOptionInts& pem, int physical)
 {

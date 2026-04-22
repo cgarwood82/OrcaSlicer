@@ -438,14 +438,9 @@ ColorRGBA PartPlate::get_imex_head_filament_color(int physical_head) const
     if (!pb)
         return GLVolume::UNPRINTABLE_COLOR;
 
-    const ConfigOptionInts* pem = pb->project_config.option<ConfigOptionInts>("physical_extruder_map");
-    if (!pem || pem->values.size() < 2)
-        pem = pb->printers.get_edited_preset().config.option<ConfigOptionInts>("physical_extruder_map");
-    if (!pem)
-        return GLVolume::UNPRINTABLE_COLOR;
-
+    const ConfigOptionInts pem = effective_physical_extruder_map(*pb);
     const auto plate_map = get_imex_head_filament_map();
-    const int logical = resolve_filament_for_head(plate_map, *pem, physical_head);
+    const int logical = resolve_filament_for_head(plate_map, pem, physical_head);
     if (logical < 0)
         return GLVolume::UNPRINTABLE_COLOR;
 
@@ -979,13 +974,11 @@ std::string PartPlate::build_imex_ghost_cache_key() const
     if (k.empty()) return "";  // ghost-off when zones-off
 
     if (auto* pb = wxGetApp().preset_bundle) {
-        const ConfigOptionInts* pem = pb->project_config.option<ConfigOptionInts>("physical_extruder_map");
-        if (!pem || pem->values.size() < 2)
-            pem = pb->printers.get_edited_preset().config.option<ConfigOptionInts>("physical_extruder_map");
-        if (pem) {
-            k += "|pem";
-            for (int v : pem->values) { k += ':'; k += std::to_string(v); }
-        }
+        // Keyed on the effective pem (project → printer → pei-derived) so a printer
+        // swap that only changes printer_extruder_id still invalidates the ghost cache.
+        const ConfigOptionInts pem = effective_physical_extruder_map(*pb);
+        k += "|pem";
+        for (int v : pem.values) { k += ':'; k += std::to_string(v); }
     }
     k += "|obj";
     for (const auto& oi : obj_to_instance_set)

@@ -11,6 +11,25 @@
 
 namespace Slic3r {
 
+class PresetBundle;
+
+// Returns the effective physical_extruder_map given an optionally-explicit map and
+// the printer's `printer_extruder_id`. If `explicit_pem` has size >= 2 the caller
+// authored one, and it is returned verbatim. Otherwise the map is auto-derived
+// from `printer_extruder_id` by converting each 1-indexed value to 0-indexed.
+// Returns an empty ConfigOptionInts if neither source yields any values.
+// Slice-time (PrintApply) and GUI ghost-color paths both call this so a printer
+// profile without an explicit pem still gets a consistent mapping.
+ConfigOptionInts effective_physical_extruder_map(const ConfigOptionInts* explicit_pem,
+                                                  const ConfigOptionInts* printer_extruder_id);
+
+// GUI overload: resolves the effective pem from a live PresetBundle using the
+// project_config → printer preset fallback, then derives from printer_extruder_id
+// if neither holds a user-authored map (size >= 2). Use this instead of open-coding
+// the lookup at ghost-color, tooltip, click-gate, and cache-key call sites so they
+// all agree on what the slicer will see.
+ConfigOptionInts effective_physical_extruder_map(const PresetBundle& pb);
+
 // Returns the lowest 0-based logical filament index L such that pem[L] == physical.
 // Returns -1 if no filament routes to `physical`.
 // Degenerate case: an empty pem returns 0 when `physical == 0` (identity-on-head-0

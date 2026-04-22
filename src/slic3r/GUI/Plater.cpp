@@ -18543,14 +18543,15 @@ Plater::ImexGhostTooltip Plater::format_imex_ghost_tooltip(int physical_head) co
         return t;
     }
 
-    const ConfigOptionInts* pem = wxGetApp().preset_bundle->project_config.option<ConfigOptionInts>("physical_extruder_map");
-    if (!pem || pem->values.size() < 2)
-        pem = wxGetApp().preset_bundle->printers.get_edited_preset().config.option<ConfigOptionInts>("physical_extruder_map");
-
+    const ConfigOptionInts pem = effective_physical_extruder_map(*wxGetApp().preset_bundle);
     const auto map = plate->get_imex_head_filament_map();
-    const int logical = pem ? resolve_filament_for_head(map, *pem, physical_head) : -1;
+    const int logical = resolve_filament_for_head(map, pem, physical_head);
     if (logical < 0) {
-        t.label = "T" + std::to_string(physical_head) + " -> (no filament routed)";
+        // No filament slot resolves to this physical head. Usually means the printer's
+        // extruder count is understated relative to the filament palette (user added a
+        // filament without extending printer_extruder_id in the Machine tab).
+        t.label = "T" + std::to_string(physical_head) + " — no filament routed\n"
+                  "Add an extruder in the Machine tab so this head has a filament slot.";
         return t;
     }
     t.filament_slot_1based = logical + 1;
@@ -18563,13 +18564,10 @@ Plater::ImexGhostTooltip Plater::format_imex_ghost_tooltip(int physical_head) co
 
 void Plater::on_imex_ghost_click(int physical_head)
 {
-    const ConfigOptionInts* pem = wxGetApp().preset_bundle->project_config.option<ConfigOptionInts>("physical_extruder_map");
-    if (!pem || pem->values.size() < 2)
-        pem = wxGetApp().preset_bundle->printers.get_edited_preset().config.option<ConfigOptionInts>("physical_extruder_map");
-    if (!pem) return;
+    const ConfigOptionInts pem = effective_physical_extruder_map(*wxGetApp().preset_bundle);
 
     int lane_count = 0;
-    for (int pv : pem->values) if (pv == physical_head) ++lane_count;
+    for (int pv : pem.values) if (pv == physical_head) ++lane_count;
     if (lane_count < 2) return;  // single-lane head -> click is a no-op, tooltip conveyed status
 
     PartPlate* plate = p->partplate_list.get_curr_plate();
@@ -18577,7 +18575,7 @@ void Plater::on_imex_ghost_click(int physical_head)
 
     auto* picker = new IMEXFilamentPickerPopover(
         p->view3D->get_canvas3d()->get_wxglcanvas(),
-        plate, *pem, physical_head,
+        plate, pem, physical_head,
         [this]() {
             take_snapshot("edit imex head filament");
             update_project_dirty_from_presets();

@@ -30,7 +30,10 @@ private:
     void on_filament_selected(int slot_1_based);
 
     PartPlate*              m_plate;
-    const ConfigOptionInts& m_pem;
+    // Owned by value: callers may pass a stack-local derived pem
+    // (e.g. effective_physical_extruder_map result) that won't outlive
+    // the popover's async lifetime.
+    ConfigOptionInts        m_pem;
     int                     m_physical_head;
     CommitCallback          m_on_commit;
 

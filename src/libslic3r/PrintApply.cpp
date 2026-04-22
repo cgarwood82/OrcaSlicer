@@ -1,4 +1,5 @@
 #include "ClipperUtils.hpp"
+#include "IMEXHelpers.hpp"
 #include "Model.hpp"
 #include "Print.hpp"
 
@@ -1168,11 +1169,8 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
     {
         auto* pem = new_full_config.option<ConfigOptionInts>("physical_extruder_map", true);
         const auto* pei = new_full_config.option<ConfigOptionInts>("printer_extruder_id");
-        if (pem && pei && !pei->values.empty() && pem->values.size() <= 1) {
-            pem->values.clear();
-            for (int v : pei->values)
-                pem->values.push_back(v - 1); // convert 1-indexed extruder IDs to 0-indexed
-        }
+        if (pem)
+            pem->values = effective_physical_extruder_map(pem, pei).values;
     }
 
     m_ori_full_print_config = new_full_config;
