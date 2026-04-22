@@ -7421,6 +7421,19 @@ void GLCanvas3D::_render_imex_ghost_tooltip()
     if (m_hover_ghost_head < 0)
         return;
 
+    // Hover state can outlive the ghosts that produced it: _picking_pass_imex_ghosts
+    // only resets m_hover_ghost_head when it runs, and _picking_pass early-returns
+    // (mouse drag, mouse off-canvas, gizmo drag) skip that reset. If the user switches
+    // from an IMEX printer to a non-IMEX one during such a window, the plate clears its
+    // ghost volumes but the stale head index survives — producing an orphan tooltip.
+    // Validate against live ghosts and self-heal before rendering.
+    const PartPlate* plate = wxGetApp().plater()->get_partplate_list().get_plate(m_hover_ghost_plate);
+    if (!plate || plate->get_imex_ghost_volumes().empty()) {
+        m_hover_ghost_head  = -1;
+        m_hover_ghost_plate = -1;
+        return;
+    }
+
     const auto t = wxGetApp().plater()->format_imex_ghost_tooltip(m_hover_ghost_head);
 
     ImGuiWrapper& imgui = *wxGetApp().imgui();
