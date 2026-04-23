@@ -1656,8 +1656,11 @@ void CalibrationPresetPage::update_sync_button_status()
     if (curr_obj->is_multi_extruders()) {
         std::vector<CaliNozzleInfo> machine_obj_nozzle_infos;
         machine_obj_nozzle_infos.resize(2);
+        bool any_machine_diameter_unknown = false;
         for (const DevExtder& extruder : curr_obj->GetExtderSystem()->GetExtruders()) {
-            machine_obj_nozzle_infos[extruder.GetExtId()].nozzle_diameter = extruder.GetNozzleDiameter();
+            const float d = extruder.GetNozzleDiameter();
+            any_machine_diameter_unknown |= (d < 1e-3f);
+            machine_obj_nozzle_infos[extruder.GetExtId()].nozzle_diameter = d;
             machine_obj_nozzle_infos[extruder.GetExtId()].nozzle_volume_type = int(extruder.GetNozzleFlowType()) - 1;
         }
 
@@ -1668,7 +1671,9 @@ void CalibrationPresetPage::update_sync_button_status()
             cali_nozzle_infos[extruder_id].nozzle_volume_type = int(get_nozzle_volume_type(extruder_id));
         }
 
-        if (machine_obj_nozzle_infos == cali_nozzle_infos) {
+        // Same 0.0 == unknown guard as the single-extruder branch below: if firmware hasn't
+        // reported any extruder's diameter, treat as synced — there's nothing to compare.
+        if (any_machine_diameter_unknown || machine_obj_nozzle_infos == cali_nozzle_infos) {
             set_status(true);
         }
         else {
