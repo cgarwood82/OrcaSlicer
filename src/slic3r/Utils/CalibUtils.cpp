@@ -1341,7 +1341,7 @@ bool CalibUtils::check_printable_status_before_cali(const MachineObject *obj, co
         float diameter = obj->GetExtderSystem()->GetNozzleDiameter(extruder_id);
         NozzleFlowType nozzle_volume_type = obj->GetExtderSystem()->GetNozzleFlowType(extruder_id);
         // Skip the diameter match check when the machine hasn't reported nozzle info (0.0 = unknown).
-        if (diameter >= 1e-3f && !is_approx(cali_info.nozzle_diameter, diameter)) {
+        if (diameter != 0.0f && !is_approx(cali_info.nozzle_diameter, diameter)) {
             if (is_multi_extruder)
                 error_message = wxString::Format(_L("The currently selected nozzle diameter of %s extruder does not match the actual nozzle diameter.\n"
                                "Please click the Sync button above and restart the calibration."), name);
@@ -1410,7 +1410,7 @@ bool CalibUtils::check_printable_status_before_cali(const MachineObject *obj, co
         NozzleFlowType nozzle_volume_type = obj->GetExtderSystem()->GetNozzleFlowType(cali_info.extruder_id);
 
         // Skip the diameter match check when the machine hasn't reported nozzle info (0.0 = unknown).
-        if (diameter >= 1e-3f && !is_approx(cali_info.nozzle_diameter, diameter)) {
+        if (diameter != 0.0f && !is_approx(cali_info.nozzle_diameter, diameter)) {
             if (is_multi_extruder)
                 error_message = wxString::Format(_L("The currently selected nozzle diameter of %s extruder does not match the actual nozzle diameter.\n"
                                                     "Please click the Sync button above and restart the calibration."), name);
@@ -1461,7 +1461,7 @@ bool CalibUtils::check_printable_status_before_cali(const MachineObject* obj, co
     NozzleFlowType nozzle_volume_type = obj->GetExtderSystem()->GetNozzleFlowType(cali_info.extruder_id);
 
     // Skip the diameter match check when the machine hasn't reported nozzle info (0.0 = unknown).
-    if (diameter >= 1e-3f && !is_approx(nozzle_diameter, diameter)) {
+    if (diameter != 0.0f && !is_approx(nozzle_diameter, diameter)) {
         if (is_multi_extruder)
             error_message = wxString::Format(_L("The currently selected nozzle diameter of %s extruder does not match the actual nozzle diameter.\n"
                                "Please click the Sync button above and restart the calibration."), name);

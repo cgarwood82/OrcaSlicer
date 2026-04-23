@@ -647,7 +647,7 @@ wxArrayString NewCalibrationHistoryDialog::get_all_filaments(const MachineObject
     // If the machine didn't report a nozzle diameter (0.0 = unknown), fall back to the currently
     // selected printer preset so the filament list isn't empty.
     float machine_diameter = obj->GetExtderSystem()->GetNozzleDiameter(0);
-    if (machine_diameter < 1e-3f && preset_bundle) {
+    if (machine_diameter == 0.0f && preset_bundle) {
         const ConfigOption *opt = preset_bundle->printers.get_selected_preset().config.option("nozzle_diameter");
         if (opt) machine_diameter = static_cast<const ConfigOptionFloats *>(opt)->values[0];
     }

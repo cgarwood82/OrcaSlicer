@@ -1659,7 +1659,7 @@ void CalibrationPresetPage::update_sync_button_status()
         bool any_machine_diameter_unknown = false;
         for (const DevExtder& extruder : curr_obj->GetExtderSystem()->GetExtruders()) {
             const float d = extruder.GetNozzleDiameter();
-            any_machine_diameter_unknown |= (d < 1e-3f);
+            any_machine_diameter_unknown |= (d == 0.0f);
             machine_obj_nozzle_infos[extruder.GetExtId()].nozzle_diameter = d;
             machine_obj_nozzle_infos[extruder.GetExtId()].nozzle_volume_type = int(extruder.GetNozzleFlowType()) - 1;
         }
@@ -1685,7 +1685,7 @@ void CalibrationPresetPage::update_sync_button_status()
         // Defensive: this wizard is reached only from CalibrationPanel (BBL-only) today, so the guard
         // fires only during the brief BBL startup window before firmware pushes nozzle info.
         // If nozzle info isn't reported (0.0 = unknown), treat as synced — there's nothing to compare.
-        if (machine_diameter < 1e-3f || abs(machine_diameter - get_nozzle_diameter(0)) < EPSILON) {
+        if (machine_diameter == 0.0f || abs(machine_diameter - get_nozzle_diameter(0)) < EPSILON) {
             set_status(true);
         }
         else {

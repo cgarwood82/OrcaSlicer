@@ -6768,7 +6768,7 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
 
                     // Treat unknown machine nozzle diameter (0.0 — not reported by firmware) as "no mismatch on diameter"
                     // so we don't prompt to re-sync every time a non-BBL printer is connected on file load.
-                    bool nozzle_mismatch = machine_nozzle_diameter >= 1e-3f && !is_approx((float) preset_nozzle_diameter, machine_nozzle_diameter);
+                    bool nozzle_mismatch = machine_nozzle_diameter != 0.0f && !is_approx((float) preset_nozzle_diameter, machine_nozzle_diameter);
                     if (printer_preset.get_current_printer_type(preset_bundle) != machine_type || nozzle_mismatch) {
                         Preset *machine_preset = get_printer_preset(obj);
                         if (machine_preset != nullptr) {
@@ -9387,7 +9387,7 @@ void Plater::priv::on_select_preset(wxCommandEvent &evt)
                         for (const DevExtder &extruder : extruders) {
                             // Skip extruders whose diameter hasn't been reported by the firmware (0.0 = unknown).
                             float extruder_diameter = extruder.GetNozzleDiameter();
-                            if (extruder_diameter < 1e-3f)
+                            if (extruder_diameter == 0.0f)
                                 continue;
                             if (!is_approx(extruder_diameter, float(preset_nozzle_diameter))) {
                                 same_nozzle_diameter = false;
@@ -14839,7 +14839,7 @@ Preset *get_printer_preset(const MachineObject *obj)
         // If the machine hasn't reported a nozzle diameter (0.0 = unknown, e.g. Klipper/Moonraker/RRF/Marlin
         // printers that don't push BBL nozzle info), match on model_id alone — the user's preset is the
         // authoritative source in that case.
-        bool nozzle_matches = machine_nozzle_diameter < 1e-3f ||
+        bool nozzle_matches = machine_nozzle_diameter == 0.0f ||
                               (printer_nozzle_vals && abs(printer_nozzle_vals->get_at(0) - machine_nozzle_diameter) < 1e-3);
         if (model_id.compare(printer_type) == 0 && nozzle_matches) {
             printer_preset = &(*printer_it);

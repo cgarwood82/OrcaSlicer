@@ -867,7 +867,7 @@ void AMSMaterialsSetting::Popup(wxString filament, wxString sn, wxString temp_mi
     // only during the brief BBL startup window before firmware reports nozzle info. Without this,
     // the "0.0" lookup string returns an empty set and the filament dropdown goes blank.
     float machine_diameter = obj->GetExtderSystem()->GetNozzleDiameter(0);
-    if (machine_diameter < 1e-3f && preset_bundle) {
+    if (machine_diameter == 0.0f && preset_bundle) {
         const ConfigOption *opt = preset_bundle->printers.get_selected_preset().config.option("nozzle_diameter");
         if (opt) machine_diameter = static_cast<const ConfigOptionFloats *>(opt)->values[0];
     }
@@ -1114,7 +1114,7 @@ void AMSMaterialsSetting::on_select_filament(wxCommandEvent &evt)
             // only during the brief BBL startup window before firmware reports nozzle info. Without this,
             // the "0.0" lookup string returns an empty set and filament lookup yields no results.
             float machine_diameter = obj->GetExtderSystem()->GetNozzleDiameter(0);
-            if (machine_diameter < 1e-3f) {
+            if (machine_diameter == 0.0f) {
                 const ConfigOption *opt = preset_bundle->printers.get_selected_preset().config.option("nozzle_diameter");
                 if (opt) machine_diameter = static_cast<const ConfigOptionFloats *>(opt)->values[0];
             }
