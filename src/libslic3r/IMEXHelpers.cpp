@@ -33,6 +33,14 @@ ConfigOptionInts effective_physical_extruder_map(const PresetBundle& pb)
     return effective_physical_extruder_map(explicit_pem, pei);
 }
 
+int imex_pem_tool_for(int filament_id, const std::string& parallel_mode, const ConfigOptionInts& pem)
+{
+    const bool imex_parallel = !parallel_mode.empty() && parallel_mode != kImexPrimaryMode;
+    if (!imex_parallel || pem.values.empty())
+        return -1;
+    return pem.get_at(filament_id);
+}
+
 int first_filament_for_physical_head(const ConfigOptionInts& pem, int physical)
 {
     const auto& v = pem.values;
