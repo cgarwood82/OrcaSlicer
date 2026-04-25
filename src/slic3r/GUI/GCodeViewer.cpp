@@ -1535,11 +1535,11 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
             if (is_imex_opt && is_imex_opt->value) {
                 const DynamicPrintConfig& process_cfg = preset_bundle->prints.get_edited_preset().config;
                 auto* mode_opt = process_cfg.opt<ConfigOptionString>("imex_parallel_mode");
-                std::string mode = mode_opt ? mode_opt->value : "primary";
+                std::string mode = mode_opt ? mode_opt->value : kImexPrimaryMode;
                 // Per-plate mode overrides the process preset.
                 if (auto* plate = wxGetApp().plater()->get_partplate_list().get_curr_plate()) {
                     std::string plate_mode = plate->get_imex_mode();
-                    if (plate_mode != "primary")
+                    if (plate_mode != kImexPrimaryMode)
                         mode = plate_mode;
                 }
 
@@ -1548,7 +1548,7 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
                     m_imex_last_mode = mode;
                 }
 
-                if (!mode.empty() && mode != "primary") {
+                if (!mode.empty() && mode != kImexPrimaryMode) {
                     auto* mode_names_opt   = printer_cfg.opt<ConfigOptionStrings>("imex_mode_names");
                     auto* active_tools_opt = printer_cfg.opt<ConfigOptionStrings>("imex_mode_active_tools");
 
