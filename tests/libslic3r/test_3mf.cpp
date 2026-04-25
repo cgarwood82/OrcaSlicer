@@ -205,6 +205,84 @@ SCENARIO("BBS 3MF round-trips per-plate IMEX state (parallel mode + head filamen
     }
 }
 
+SCENARIO("BBS 3MF round-trips distinct IMEX state across multiple plates", "[3mf][IMEX]") {
+    // Guards against a plate-indexing regression where IMEX metadata lands on the wrong
+    // plate or bleeds across plates on reload. Each plate carries distinct mode + head-
+    // filament-map values; the reload must reproduce them in the same order.
+    set_temporary_dir(boost::filesystem::temp_directory_path().string());
+
+    GIVEN("A Model with two plates each carrying different IMEX state") {
+        Model src_model;
+        std::string src_file = std::string(TEST_DATA_DIR) + "/test_3mf/Prusa.stl";
+        REQUIRE(load_stl(src_file.c_str(), &src_model));
+        src_model.add_default_instances();
+
+        DynamicPrintConfig src_config;
+
+        PlateDataPtrs src_plates;
+        auto *plate0 = new PlateData();
+        plate0->plate_index = 0;
+        plate0->config.set_key_value("imex_parallel_mode",     new ConfigOptionString("copy_mode"));
+        plate0->config.set_key_value("imex_head_filament_map", new ConfigOptionString("1:2"));
+        src_plates.push_back(plate0);
+
+        auto *plate1 = new PlateData();
+        plate1->plate_index = 1;
+        plate1->config.set_key_value("imex_parallel_mode",     new ConfigOptionString("mirror_mode"));
+        plate1->config.set_key_value("imex_head_filament_map", new ConfigOptionString("2:4,3:5"));
+        src_plates.push_back(plate1);
+
+        WHEN("the model is saved to BBS 3MF and loaded back") {
+            std::string test_file = std::string(TEST_DATA_DIR) + "/test_3mf/imex_multiplate_roundtrip.3mf";
+
+            StoreParams store_params;
+            store_params.path            = test_file.c_str();
+            store_params.model           = &src_model;
+            store_params.plate_data_list = src_plates;
+            store_params.config          = &src_config;
+            REQUIRE(store_bbs_3mf(store_params));
+
+            Model dst_model;
+            DynamicPrintConfig dst_config;
+            PlateDataPtrs dst_plates;
+            std::vector<Preset*> dst_presets;
+            bool is_bbl = false;
+            Semver file_version;
+            ConfigSubstitutionContext ctxt{ ForwardCompatibilitySubstitutionRule::Disable };
+            bool loaded = load_bbs_3mf(test_file.c_str(), &dst_config, &ctxt, &dst_model,
+                                       &dst_plates, &dst_presets, &is_bbl, &file_version);
+            boost::filesystem::remove(test_file);
+
+            THEN("load succeeds and both plates are returned") {
+                REQUIRE(loaded);
+                REQUIRE(dst_plates.size() == 2);
+            }
+            THEN("plate 0 retains its own IMEX state (copy_mode, 1:2) and does not inherit plate 1's") {
+                REQUIRE(dst_plates.size() == 2);
+                auto *mode = dst_plates[0]->config.option<ConfigOptionString>("imex_parallel_mode");
+                auto *hfm  = dst_plates[0]->config.option<ConfigOptionString>("imex_head_filament_map");
+                REQUIRE(mode != nullptr);
+                REQUIRE(hfm  != nullptr);
+                REQUIRE(mode->value == "copy_mode");
+                REQUIRE(hfm->value  == "1:2");
+            }
+            THEN("plate 1 retains its own IMEX state (mirror_mode, 2:4,3:5) and does not inherit plate 0's") {
+                REQUIRE(dst_plates.size() == 2);
+                auto *mode = dst_plates[1]->config.option<ConfigOptionString>("imex_parallel_mode");
+                auto *hfm  = dst_plates[1]->config.option<ConfigOptionString>("imex_head_filament_map");
+                REQUIRE(mode != nullptr);
+                REQUIRE(hfm  != nullptr);
+                REQUIRE(mode->value == "mirror_mode");
+                REQUIRE(hfm->value  == "2:4,3:5");
+            }
+
+            release_PlateData_list(dst_plates);
+        }
+
+        release_PlateData_list(src_plates);
+    }
+}
+
 SCENARIO("BBS 3MF does not emit IMEX metadata when plate is in primary mode", "[3mf][IMEX]") {
     // The serialization guard short-circuits when the mode is empty or "primary", so loading
     // a plate that was saved in primary mode must not leave a stale imex_parallel_mode option

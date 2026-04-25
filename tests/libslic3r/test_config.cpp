@@ -310,16 +310,21 @@ SCENARIO("update_non_diff_values_to_base_config does not truncate stride=2 child
     }
 }
 
-SCENARIO("update_non_diff_values_to_base_config preserves child variant values when child and parent extruder counts match",
+SCENARIO("update_non_diff_values_to_base_config runs the merge path in the equal-size case",
          "[Config][Variant]") {
-    // The fix's guard is `cur > target ? skip`. The equal-size path must still run normally and
-    // preserve the child's per-extruder values via set_with_restore's nil-restore mechanism.
-    GIVEN("A 2-extruder child inheriting from a 2-extruder parent with different per-extruder values") {
+    // Distinguishes the fix's `cur > target` guard from a stricter `cur >= target`.
+    // With `cur > target` (correct): equal-size does NOT fire the guard; merge runs via
+    // set_with_restore, which builds variant_index by matching (extruder_variant, extruder_id)
+    // pairs between child and parent. When the variants don't match, variant_index positions
+    // stay at -1, and set_with_restore overwrites those child positions with parent values.
+    // With `cur >= target` (regressed): guard fires; merge is skipped; child values stay intact.
+    // Using mismatched variants makes the two outcomes observably different.
+    GIVEN("A 2-extruder child and parent with matching extruder counts but mismatched variant names") {
         Slic3r::DynamicPrintConfig child;
         Slic3r::DynamicPrintConfig parent;
 
         child.set_key_value("printer_extruder_id",        new Slic3r::ConfigOptionInts({1, 2}));
-        child.set_key_value("printer_extruder_variant",   new Slic3r::ConfigOptionStrings({"Direct Drive Standard", "Direct Drive Standard"}));
+        child.set_key_value("printer_extruder_variant",   new Slic3r::ConfigOptionStrings({"Bowden Standard",      "Bowden Standard"}));
         child.set_key_value("retraction_length",          new Slic3r::ConfigOptionFloats({1.5, 2.5}));
 
         parent.set_key_value("printer_extruder_id",       new Slic3r::ConfigOptionInts({1, 2}));
@@ -344,10 +349,14 @@ SCENARIO("update_non_diff_values_to_base_config preserves child variant values w
             THEN("retraction_length retains size 2") {
                 REQUIRE(child.option<Slic3r::ConfigOptionFloats>("retraction_length")->values.size() == 2);
             }
-            THEN("retraction_length preserves the child's per-extruder values, not the parent's") {
+            THEN("retraction_length gets parent values — proves the merge ran (guard did not fire)") {
+                // If the guard regressed to `cur >= target`, this path would be skipped and
+                // retraction_length would remain {1.5, 2.5}. The correct `cur > target` guard
+                // does not fire for equal-size, the merge proceeds, and with mismatched
+                // variants the child positions receive parent values.
                 auto* rl = child.option<Slic3r::ConfigOptionFloats>("retraction_length");
-                REQUIRE_THAT(rl->values[0], Catch::Matchers::WithinAbs(1.5, 1e-9));
-                REQUIRE_THAT(rl->values[1], Catch::Matchers::WithinAbs(2.5, 1e-9));
+                REQUIRE_THAT(rl->values[0], Catch::Matchers::WithinAbs(0.8, 1e-9));
+                REQUIRE_THAT(rl->values[1], Catch::Matchers::WithinAbs(0.8, 1e-9));
             }
         }
     }
