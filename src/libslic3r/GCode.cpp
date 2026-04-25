@@ -2869,13 +2869,27 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     for (unsigned int extruder : tool_ordering.all_extruders())
         is_extruder_used[extruder] = true;
 
-    // Orca IMEX: Also mark secondary carriages as used in parallel modes
-    // so is_extruder_used[N] is true for all physical tools in the active mode.
-    // Secondary carriages never appear in tool_ordering.all_extruders() because
-    // the firmware duplicates the primary's moves — no tool-change commands are emitted.
-    for (int tool_idx : get_imex_active_tools(print))
-        if (tool_idx < (int)is_extruder_used.size())
-            is_extruder_used[tool_idx] = true;
+    // Orca IMEX: also mark the LOGICAL filament slot that each active secondary
+    // carriage will load during the print. is_extruder_used is logical-slot indexed
+    // (consumed as `is_extruder_used[N]` in machine_start_gcode templates), but
+    // get_imex_active_tools returns PHYSICAL extruder indices. On any printer with
+    // physical_extruder_map size > 1 (MMU/AFC), writing the physical index into a
+    // logical-indexed array marks the wrong slot — start-gcode templates would emit
+    // the wrong filament's temp / not emit the correct one.
+    //
+    // Translate physical -> logical via the per-plate imex_head_filament_map (set by
+    // the IMEX ghost picker), with first_filament_for_physical_head as the fallback
+    // when no override is set.
+    if (print.config().is_imex.value && !print.objects().empty()) {
+        const auto plate_head_map = parse_imex_head_filament_map(
+            print.objects().front()->config().imex_head_filament_map.value);
+        const ConfigOptionInts& pem = print.config().physical_extruder_map;
+        for (int phys_tool : get_imex_active_tools(print)) {
+            const int logical = resolve_filament_for_head(plate_head_map, pem, phys_tool);
+            if (logical >= 0 && logical < (int)is_extruder_used.size())
+                is_extruder_used[logical] = true;
+        }
+    }
 
     this->placeholder_parser().set("is_extruder_used", new ConfigOptionBools(is_extruder_used));
 
