@@ -17984,20 +17984,24 @@ int Plater::select_plate_by_hover_id(int hover_id, bool right_click, bool isModi
                 // Show a popup menu with all modes.
                 wxMenu menu;
                 std::string current = curr_plate->get_imex_mode();
+                std::vector<int> mode_ids;
+                mode_ids.reserve(modes.size());
                 for (size_t i = 0; i < modes.size(); ++i) {
-                    wxMenuItem* item = menu.AppendRadioItem(wxID_HIGHEST + (int)i, from_u8(modes[i]));
+                    int id = wxNewId();
+                    mode_ids.push_back(id);
+                    wxMenuItem* item = menu.AppendRadioItem(id, from_u8(modes[i]));
                     if (modes[i] == current)
                         item->Check(true);
                 }
-                menu.Bind(wxEVT_MENU, [this, curr_plate, &modes](wxCommandEvent& e) {
-                    int idx = e.GetId() - wxID_HIGHEST;
-                    if (idx >= 0 && idx < (int)modes.size()) {
-                        take_snapshot("set imex mode");
-                        curr_plate->set_imex_mode(modes[idx]);
-                        update_project_dirty_from_presets();
-                        set_plater_dirty(true);
-                        update();
-                    }
+                menu.Bind(wxEVT_MENU, [this, curr_plate, modes, mode_ids](wxCommandEvent& e) {
+                    auto it = std::find(mode_ids.begin(), mode_ids.end(), e.GetId());
+                    if (it == mode_ids.end()) return;
+                    const size_t idx = std::distance(mode_ids.begin(), it);
+                    take_snapshot("set imex mode");
+                    curr_plate->set_imex_mode(modes[idx]);
+                    update_project_dirty_from_presets();
+                    set_plater_dirty(true);
+                    update();
                 });
                 p->view3D->get_canvas3d()->get_wxglcanvas()->PopupMenu(&menu);
                 ret = 1; // signal to caller: popup was shown, suppress plate context menu

@@ -933,8 +933,8 @@ std::string PartPlate::build_imex_cache_key() const
     return active_mode
          + "|" + std::to_string(n_col_opt ? n_col_opt->value : 2)
          + "x" + std::to_string(n_row_opt ? n_row_opt->value : 1)
-         + "|cw" + std::to_string(cw_opt ? (int)cw_opt->value : 0)
-         + "|ch" + std::to_string(ch_opt ? (int)ch_opt->value : 0)
+         + "|cw" + std::to_string(cw_opt ? (int)(cw_opt->value * 10) : 0)
+         + "|ch" + std::to_string(ch_opt ? (int)(ch_opt->value * 10) : 0)
          + "|mg" + std::to_string(mgn_opt ? (int)(mgn_opt->value * 10) : 0);
 }
 

@@ -1605,7 +1605,7 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
                         float bed_x_min, bed_x_max, bed_y_min, bed_y_max;
                         {
                             PartPlate* curr_plate = wxGetApp().plater()->get_partplate_list().get_curr_plate();
-                            const Pointfs& plate_shape = curr_plate->get_shape();
+                            const Pointfs& plate_shape = curr_plate ? curr_plate->get_shape() : Pointfs{};
                             if (!plate_shape.empty()) {
                                 bed_x_min = (float)plate_shape[0].x();
                                 bed_x_max = bed_x_min;
