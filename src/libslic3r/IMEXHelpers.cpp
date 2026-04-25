@@ -84,7 +84,7 @@ std::vector<std::pair<int, ImexRole>> parse_imex_active_tools(const std::string&
         const std::string idx_str = (colon == std::string::npos) ? tok : tok.substr(0, colon);
         int phys = -1;
         try { phys = std::stoi(idx_str); } catch (...) { continue; }
-        if (phys < 0) continue;
+        if (phys < 0 || phys >= (int)MAXIMUM_EXTRUDER_NUMBER) continue;
         ImexRole role = ImexRole::Copy;
         if (colon != std::string::npos) {
             const std::string r = tok.substr(colon + 1);

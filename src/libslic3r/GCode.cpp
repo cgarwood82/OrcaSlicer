@@ -2395,8 +2395,10 @@ static BambuBedType to_bambu_bed_type(BedType type)
 // Orca IMEX: Returns the tool indices active in the current IMEX mode.
 // In copy/mirror parallel modes, secondary carriages never receive tool-change
 // commands — the firmware mirrors the primary's moves — so they don't appear in
-// tool_ordering.all_extruders(). This helper parses imex_mode_active_tools to enumerate them.
-// Format: "0:P,1:C,2:M,3:M" — only the leading integer index is used.
+// tool_ordering.all_extruders(). This helper extracts the active mode's tool string
+// from the Print and delegates parsing to IMEXHelpers::parse_imex_active_tools so the
+// "phys[:role]" tokenization matches every other IMEX consumer (PartPlate zones,
+// GCodeViewer legend, Plater warnings).
 // Indices are PHYSICAL T-indices. Callers that need a filament-slot (for PA / temp
 // lookups) must resolve via first_filament_for_physical_head or resolve_filament_for_head.
 static std::vector<int> get_imex_active_tools(const Print& print)
@@ -2418,17 +2420,8 @@ static std::vector<int> get_imex_active_tools(const Print& print)
     for (size_t i = 0; i < mode_names_opt->values.size(); ++i) {
         if (i >= tools_opt->values.size() || mode_names_opt->values[i] != active_mode)
             continue;
-        std::istringstream ss(tools_opt->values[i]);
-        std::string token;
-        while (std::getline(ss, token, ',')) {
-            token.erase(std::remove_if(token.begin(), token.end(), ::isspace), token.end());
-            if (token.empty()) continue;
-            try {
-                int idx = std::stoi(token); // leading integer before optional ':role' suffix
-                if (idx >= 0 && idx < (int)MAXIMUM_EXTRUDER_NUMBER)
-                    active_tools.push_back(idx);
-            } catch (...) {}
-        }
+        for (const auto& [phys, role] : parse_imex_active_tools(tools_opt->values[i]))
+            active_tools.push_back(phys);
         break;
     }
     return active_tools;
