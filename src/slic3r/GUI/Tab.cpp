@@ -2,6 +2,7 @@
 //#include "slic3r/Utils/Serial.hpp"
 #include "Tab.hpp"
 #include "PresetHints.hpp"
+#include "libslic3r/IMEXHelpers.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Utils.hpp"
@@ -4431,7 +4432,7 @@ public:
         m_n_rows = n_rows;
         m_layout = layout;
         for (size_t i = 0; i < names.size(); ++i)
-            add_row(names[i], tools[i], gcodes[i], /*is_primary=*/(names[i] == "primary"));
+            add_row(names[i], tools[i], gcodes[i], /*is_primary=*/(names[i] == kImexPrimaryMode));
         Layout();
     }
 
@@ -4448,7 +4449,7 @@ public:
         size_t primary_cfg_idx = std::string::npos;
         if (names) {
             for (size_t i = 0; i < names->values.size(); ++i) {
-                if (names->values[i] == "primary") {
+                if (names->values[i] == kImexPrimaryMode) {
                     primary_cfg_idx = i;
                     if (tools  && i < tools->values.size())  primary_tools = tools->values[i];
                     if (gcodes && i < gcodes->values.size()) primary_gcode = gcodes->values[i];
@@ -4456,7 +4457,7 @@ public:
                 }
             }
         }
-        add_row("primary", primary_tools, primary_gcode, /*is_primary=*/true);
+        add_row(kImexPrimaryMode, primary_tools, primary_gcode, /*is_primary=*/true);
 
         size_t n = names ? names->values.size() : 0;
         for (size_t i = 0; i < n; ++i) {
@@ -4472,7 +4473,7 @@ public:
     get_mode_data() const {
         std::vector<std::string> names, tools, gcodes;
         for (auto& r : m_rows) {
-            std::string nm = r.is_primary ? "primary" : r.name->GetValue().ToStdString();
+            std::string nm = r.is_primary ? std::string(kImexPrimaryMode) : r.name->GetValue().ToStdString();
             if (nm.empty()) continue;
             names.push_back(nm);
             tools.push_back(active_tools_string(r));

@@ -1,5 +1,6 @@
 #include "../libslic3r.h"
 #include "../Exception.hpp"
+#include "../IMEXHelpers.hpp"
 #include "../Model.hpp"
 #include "../Preset.hpp"
 #include "../Utils.hpp"
@@ -7791,7 +7792,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
 
                 {
                     auto* imex_mode_opt = plate_data->config.option<ConfigOptionString>("imex_parallel_mode");
-                    if (imex_mode_opt && !imex_mode_opt->value.empty() && imex_mode_opt->value != "primary")
+                    if (imex_mode_opt && !imex_mode_opt->value.empty() && imex_mode_opt->value != kImexPrimaryMode)
                         stream << "    <" << METADATA_TAG << " " << KEY_ATTR << "=\"" << IMEX_PARALLEL_MODE_ATTR << "\" " << VALUE_ATTR << "=\"" << imex_mode_opt->value << "\"/>\n";
                 }
                 {

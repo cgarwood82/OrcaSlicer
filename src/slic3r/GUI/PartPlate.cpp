@@ -375,12 +375,12 @@ std::string PartPlate::get_imex_mode() const
         if (opt && !opt->value.empty())
             return opt->value;
     }
-    return "primary";
+    return kImexPrimaryMode;
 }
 
 void PartPlate::set_imex_mode(const std::string& mode)
 {
-    if (mode.empty() || mode == "primary") {
+    if (mode.empty() || mode == kImexPrimaryMode) {
         m_config.erase("imex_parallel_mode");
     } else {
         m_config.set_key_value("imex_parallel_mode", new ConfigOptionString(mode));
@@ -568,13 +568,13 @@ void PartPlate::calc_imex_zones()
 
     // Per-plate mode takes priority over the process preset.
     std::string active_mode = get_imex_mode();
-    if (active_mode == "primary") {
+    if (active_mode == kImexPrimaryMode) {
         const DynamicPrintConfig& process_cfg = wxGetApp().preset_bundle->prints.get_edited_preset().config;
         auto* mode_opt = process_cfg.option<ConfigOptionString>("imex_parallel_mode");
         if (mode_opt && !mode_opt->value.empty())
             active_mode = mode_opt->value;
     }
-    if (active_mode == "primary" || active_mode.empty())
+    if (active_mode == kImexPrimaryMode || active_mode.empty())
         return;
 
     // Grid dimensions and tool layout from printer config
@@ -919,7 +919,7 @@ std::string PartPlate::build_imex_cache_key() const
         return "";
     // Per-plate mode takes priority over process preset.
     std::string active_mode = get_imex_mode();
-    if (active_mode == "primary") {
+    if (active_mode == kImexPrimaryMode) {
         const DynamicPrintConfig& process_cfg = wxGetApp().preset_bundle->prints.get_edited_preset().config;
         auto* mode_opt = process_cfg.option<ConfigOptionString>("imex_parallel_mode");
         if (mode_opt && !mode_opt->value.empty())
@@ -1005,12 +1005,12 @@ bool PartPlate::resolve_active_mode_tools(std::string& out_tools_str, int& out_p
     if (!is_imex_opt || !is_imex_opt->value) return false;
 
     std::string active_mode = get_imex_mode();
-    if (active_mode == "primary" || active_mode.empty()) {
+    if (active_mode == kImexPrimaryMode || active_mode.empty()) {
         const DynamicPrintConfig& proc_cfg = wxGetApp().preset_bundle->prints.get_edited_preset().config;
         if (auto* mo = proc_cfg.option<ConfigOptionString>("imex_parallel_mode"))
             active_mode = mo->value;
     }
-    if (active_mode.empty() || active_mode == "primary") return false;
+    if (active_mode.empty() || active_mode == kImexPrimaryMode) return false;
 
     auto* names = printer_cfg.option<ConfigOptionStrings>("imex_mode_names");
     auto* tools = printer_cfg.option<ConfigOptionStrings>("imex_mode_active_tools");
@@ -1214,7 +1214,7 @@ bool PartPlate::has_imex_multimaterial_conflict() const
     if (!pb) return false;
     auto* is_imex_opt = pb->printers.get_edited_preset().config.option<ConfigOptionBool>("is_imex");
     if (!is_imex_opt || !is_imex_opt->value) return false;
-    if (get_imex_mode() == "primary") return false;
+    if (get_imex_mode() == kImexPrimaryMode) return false;
 
     // Condition 2: objects on this plate actually use more than one unique filament/extruder
     std::vector<int> used = get_extruders(true);

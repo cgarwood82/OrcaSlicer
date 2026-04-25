@@ -2407,7 +2407,7 @@ static std::vector<int> get_imex_active_tools(const Print& print)
         return active_tools;
 
     const std::string& raw_mode = print.objects().front()->config().imex_parallel_mode.value;
-    const std::string  active_mode = raw_mode.empty() ? "primary" : raw_mode;
+    const std::string  active_mode = raw_mode.empty() ? kImexPrimaryMode : raw_mode;
 
     const auto* mode_names_opt = print.config().option<ConfigOptionStrings>("imex_mode_names");
     const auto* tools_opt      = print.config().option<ConfigOptionStrings>("imex_mode_active_tools");
@@ -3101,7 +3101,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     m_imex_head_filament_map.clear();
     if (print.config().is_imex.value && !print.objects().empty()) {
         const std::string& raw = print.objects().front()->config().imex_parallel_mode.value;
-        imex_active_mode = raw.empty() ? "primary" : raw;
+        imex_active_mode = raw.empty() ? kImexPrimaryMode : raw;
         m_imex_parallel_mode = imex_active_mode;
         m_imex_head_filament_map = parse_imex_head_filament_map(
             print.objects().front()->config().imex_head_filament_map.value);
@@ -3240,7 +3240,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         // In primary mode, regular tool-change PA handles each tool as it becomes active.
         // In parallel modes no tool changes occur, so every carriage must be addressed
         // explicitly here before printing starts.
-        if (!m_imex_parallel_mode.empty() && m_imex_parallel_mode != "primary"
+        if (!m_imex_parallel_mode.empty() && m_imex_parallel_mode != kImexPrimaryMode
             && !m_config.physical_extruder_map.values.empty()) {
             // initial_physical: pem-translate the print's initial logical extruder so the
             // loop can skip the primary head (which emitted PA via the normal path).
@@ -4710,7 +4710,7 @@ LayerResult GCode::process_layer(
         // so they're not in m_writer.extruders() and multiple_extruders==false (max id==0).
         // Use the static set_temperature path for IMEX so the T index is always emitted.
         // In primary mode, fall through to the standard path — tool changes handle temps normally.
-        if (!m_imex_parallel_mode.empty() && m_imex_parallel_mode != "primary") {
+        if (!m_imex_parallel_mode.empty() && m_imex_parallel_mode != kImexPrimaryMode) {
             // All active tools need explicit temps — none receive tool-change commands,
             // so we can't rely on the condition used for non-IMEX (temp != initial_layer_temp).
             // A tool whose initial and regular temps are the same still needs to be set here.
@@ -7599,7 +7599,7 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
             // Guard the pem lookup: PrintApply populates pem when printer_extruder_id
             // is set, but defense-in-depth prevents a throw from get_at on any
             // empty-pem path that might slip through in exotic profiles.
-            const bool imex_parallel = !m_imex_parallel_mode.empty() && m_imex_parallel_mode != "primary";
+            const bool imex_parallel = !m_imex_parallel_mode.empty() && m_imex_parallel_mode != kImexPrimaryMode;
             const int pa_tool = (imex_parallel && !m_config.physical_extruder_map.values.empty())
                 ? m_config.physical_extruder_map.get_at((int)new_filament_id)
                 : -1;
@@ -7903,7 +7903,7 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
 
     if (m_config.enable_pressure_advance.get_at(new_filament_id)) {
         // Empty-pem guard mirrors the earlier PA site; get_at throws on empty values.
-        const bool imex_parallel = !m_imex_parallel_mode.empty() && m_imex_parallel_mode != "primary";
+        const bool imex_parallel = !m_imex_parallel_mode.empty() && m_imex_parallel_mode != kImexPrimaryMode;
         const int pa_tool = (imex_parallel && !m_config.physical_extruder_map.values.empty())
             ? m_config.physical_extruder_map.get_at((int)new_filament_id)
             : -1;

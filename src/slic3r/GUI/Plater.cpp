@@ -9944,7 +9944,7 @@ static std::vector<wxString> collect_imex_warnings(PartPlate* plate)
 
     // Checks 2 & 3 only apply when a non-primary parallel mode is active
     const std::string mode = plate->get_imex_mode();
-    if (mode == "primary") return warnings;
+    if (mode == kImexPrimaryMode) return warnings;
 
     PresetBundle* bundle = wxGetApp().preset_bundle;
     if (!bundle) return warnings;
@@ -17970,14 +17970,14 @@ int Plater::select_plate_by_hover_id(int hover_id, bool right_click, bool isModi
         ret = select_plate(plate_index);
         if (!ret) {
             PartPlate* curr_plate = p->partplate_list.get_curr_plate();
-            // Build ordered mode list: "primary" first, then all named modes.
+            // Build ordered mode list: kImexPrimaryMode first, then all named modes.
             std::vector<std::string> modes;
-            modes.push_back("primary");
+            modes.push_back(kImexPrimaryMode);
             const DynamicPrintConfig& printer_cfg = wxGetApp().preset_bundle->printers.get_edited_preset().config;
             auto* names_opt = printer_cfg.option<ConfigOptionStrings>("imex_mode_names");
             if (names_opt) {
                 for (const auto& n : names_opt->values)
-                    if (!n.empty() && n != "primary") modes.push_back(n);
+                    if (!n.empty() && n != kImexPrimaryMode) modes.push_back(n);
             }
 
             if (right_click) {

@@ -13,6 +13,13 @@ namespace Slic3r {
 
 class PresetBundle;
 
+// Reserved sentinel name for the always-present, non-deletable Primary mode in
+// `imex_mode_names`. Comparison with this constant indicates "no parallel printing
+// in effect" — IMEX zone visualization, ghost rendering, secondary-tool PA / temp
+// emission, and the 3MF metadata serialization all short-circuit when the active
+// plate mode equals this. Treat any value NOT equal to this as a parallel mode.
+inline constexpr const char* kImexPrimaryMode = "primary";
+
 // Returns the effective physical_extruder_map given an optionally-explicit map and
 // the printer's `printer_extruder_id`. If `explicit_pem` has size >= 2 the caller
 // authored one, and it is returned verbatim. Otherwise the map is auto-derived
