@@ -265,6 +265,134 @@ SCENARIO("DynamicPrintConfig serialization", "[Config]") {
     }
 }
 
+SCENARIO("update_non_diff_values_to_base_config does not truncate stride=2 child vectors when child has more extruders than parent",
+         "[Config][Variant]") {
+    GIVEN("A 2-extruder child with stride=2 machine limits inheriting from a 1-extruder parent") {
+        // Stride=2 keys store (normal, silent) pairs per variant: a 2-extruder child has size 4,
+        // a 1-extruder parent has size 2. The truncation guard must fire here too.
+        Slic3r::DynamicPrintConfig child;
+        Slic3r::DynamicPrintConfig parent;
+
+        child.set_key_value("printer_extruder_id",         new Slic3r::ConfigOptionInts({1, 2}));
+        child.set_key_value("printer_extruder_variant",    new Slic3r::ConfigOptionStrings({"Direct Drive Standard", "Direct Drive Standard"}));
+        child.set_key_value("machine_max_acceleration_x",  new Slic3r::ConfigOptionFloats({500.0, 200.0, 600.0, 300.0}));
+
+        parent.set_key_value("printer_extruder_id",        new Slic3r::ConfigOptionInts({1}));
+        parent.set_key_value("printer_extruder_variant",   new Slic3r::ConfigOptionStrings({"Direct Drive Standard"}));
+        parent.set_key_value("machine_max_acceleration_x", new Slic3r::ConfigOptionFloats({1000.0, 400.0}));
+
+        const Slic3r::t_config_option_keys keys = {
+            "machine_max_acceleration_x", "printer_extruder_id", "printer_extruder_variant"
+        };
+        const std::set<std::string> different_keys = {
+            "machine_max_acceleration_x", "printer_extruder_id", "printer_extruder_variant"
+        };
+
+        WHEN("update_non_diff_values_to_base_config is called") {
+            std::string id_name  = "printer_extruder_id";
+            std::string var_name = "printer_extruder_variant";
+            child.update_non_diff_values_to_base_config(
+                parent, keys, different_keys, id_name, var_name,
+                Slic3r::printer_options_with_variant_1,
+                Slic3r::printer_options_with_variant_2);
+
+            THEN("machine_max_acceleration_x retains size 4 (2 variants × 2 silent modes)") {
+                REQUIRE(child.option<Slic3r::ConfigOptionFloats>("machine_max_acceleration_x")->values.size() == 4);
+            }
+            THEN("machine_max_acceleration_x preserves both extruders' normal and silent values") {
+                auto* v = child.option<Slic3r::ConfigOptionFloats>("machine_max_acceleration_x");
+                REQUIRE_THAT(v->values[0], Catch::Matchers::WithinAbs(500.0, 1e-9));
+                REQUIRE_THAT(v->values[1], Catch::Matchers::WithinAbs(200.0, 1e-9));
+                REQUIRE_THAT(v->values[2], Catch::Matchers::WithinAbs(600.0, 1e-9));
+                REQUIRE_THAT(v->values[3], Catch::Matchers::WithinAbs(300.0, 1e-9));
+            }
+        }
+    }
+}
+
+SCENARIO("update_non_diff_values_to_base_config preserves child variant values when child and parent extruder counts match",
+         "[Config][Variant]") {
+    // The fix's guard is `cur > target ? skip`. The equal-size path must still run normally and
+    // preserve the child's per-extruder values via set_with_restore's nil-restore mechanism.
+    GIVEN("A 2-extruder child inheriting from a 2-extruder parent with different per-extruder values") {
+        Slic3r::DynamicPrintConfig child;
+        Slic3r::DynamicPrintConfig parent;
+
+        child.set_key_value("printer_extruder_id",        new Slic3r::ConfigOptionInts({1, 2}));
+        child.set_key_value("printer_extruder_variant",   new Slic3r::ConfigOptionStrings({"Direct Drive Standard", "Direct Drive Standard"}));
+        child.set_key_value("retraction_length",          new Slic3r::ConfigOptionFloats({1.5, 2.5}));
+
+        parent.set_key_value("printer_extruder_id",       new Slic3r::ConfigOptionInts({1, 2}));
+        parent.set_key_value("printer_extruder_variant",  new Slic3r::ConfigOptionStrings({"Direct Drive Standard", "Direct Drive Standard"}));
+        parent.set_key_value("retraction_length",         new Slic3r::ConfigOptionFloats({0.8, 0.8}));
+
+        const Slic3r::t_config_option_keys keys = {
+            "retraction_length", "printer_extruder_id", "printer_extruder_variant"
+        };
+        const std::set<std::string> different_keys = {
+            "retraction_length", "printer_extruder_id", "printer_extruder_variant"
+        };
+
+        WHEN("update_non_diff_values_to_base_config is called") {
+            std::string id_name  = "printer_extruder_id";
+            std::string var_name = "printer_extruder_variant";
+            child.update_non_diff_values_to_base_config(
+                parent, keys, different_keys, id_name, var_name,
+                Slic3r::printer_options_with_variant_1,
+                Slic3r::printer_options_with_variant_2);
+
+            THEN("retraction_length retains size 2") {
+                REQUIRE(child.option<Slic3r::ConfigOptionFloats>("retraction_length")->values.size() == 2);
+            }
+            THEN("retraction_length preserves the child's per-extruder values, not the parent's") {
+                auto* rl = child.option<Slic3r::ConfigOptionFloats>("retraction_length");
+                REQUIRE_THAT(rl->values[0], Catch::Matchers::WithinAbs(1.5, 1e-9));
+                REQUIRE_THAT(rl->values[1], Catch::Matchers::WithinAbs(2.5, 1e-9));
+            }
+        }
+    }
+}
+
+SCENARIO("update_non_diff_values_to_base_config truncation guard does not affect non-variant scalar keys",
+         "[Config][Variant]") {
+    // The fix is scoped to options in printer_options_with_variant_1 / _2. A non-variant scalar
+    // listed in `keys` and `different_keys` should hit the "nothing to do" branch and remain
+    // untouched regardless of child/parent extruder count mismatch.
+    GIVEN("A 2-extruder child inheriting from a 1-extruder parent, with a non-variant scalar key in `keys`") {
+        Slic3r::DynamicPrintConfig child;
+        Slic3r::DynamicPrintConfig parent;
+
+        child.set_key_value("printer_extruder_id",      new Slic3r::ConfigOptionInts({1, 2}));
+        child.set_key_value("printer_extruder_variant", new Slic3r::ConfigOptionStrings({"Direct Drive Standard", "Direct Drive Standard"}));
+        child.set_key_value("layer_height",             new Slic3r::ConfigOptionFloat(0.20));
+
+        parent.set_key_value("printer_extruder_id",      new Slic3r::ConfigOptionInts({1}));
+        parent.set_key_value("printer_extruder_variant", new Slic3r::ConfigOptionStrings({"Direct Drive Standard"}));
+        parent.set_key_value("layer_height",             new Slic3r::ConfigOptionFloat(0.28));
+
+        const Slic3r::t_config_option_keys keys = {
+            "layer_height", "printer_extruder_id", "printer_extruder_variant"
+        };
+        const std::set<std::string> different_keys = {
+            "layer_height", "printer_extruder_id", "printer_extruder_variant"
+        };
+
+        WHEN("update_non_diff_values_to_base_config is called") {
+            std::string id_name  = "printer_extruder_id";
+            std::string var_name = "printer_extruder_variant";
+            child.update_non_diff_values_to_base_config(
+                parent, keys, different_keys, id_name, var_name,
+                Slic3r::printer_options_with_variant_1,
+                Slic3r::printer_options_with_variant_2);
+
+            THEN("the non-variant scalar layer_height is left unchanged on the child") {
+                REQUIRE_THAT(child.option<Slic3r::ConfigOptionFloat>("layer_height")->value,
+                             Catch::Matchers::WithinAbs(0.20, 1e-9));
+            }
+        }
+    }
+}
+
 SCENARIO("update_non_diff_values_to_base_config preserves child vectors when child has more extruders than parent",
          "[Config][Variant]") {
     GIVEN("A 2-extruder child printer config inheriting from a 1-extruder parent") {
