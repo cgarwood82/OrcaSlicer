@@ -30,6 +30,14 @@ ConfigOptionInts effective_physical_extruder_map(const ConfigOptionInts* explici
 // all agree on what the slicer will see.
 ConfigOptionInts effective_physical_extruder_map(const PresetBundle& pb);
 
+// Returns the physical extruder index to emit as a per-tool qualifier (PA / temperature)
+// for the given filament slot, or -1 when the current IMEX state does not warrant a
+// per-tool qualification: non-IMEX / primary mode, or the pem is empty / unpopulated.
+// Used at tool-change and second-layer transition call sites where IMEX parallel modes
+// route emission through the physical extruder, while ordinary tool changes emit bare
+// firmware commands like any non-IMEX printer.
+int imex_pem_tool_for(int filament_id, const std::string& parallel_mode, const ConfigOptionInts& pem);
+
 // Returns the lowest 0-based logical filament index L such that pem[L] == physical.
 // Returns -1 if no filament routes to `physical`.
 // Degenerate case: an empty pem returns 0 when `physical == 0` (identity-on-head-0

@@ -49,6 +49,40 @@ TEST_CASE("effective_physical_extruder_map — IDEX ghost-color regression guard
     REQUIRE(first_filament_for_physical_head(pem, 1) == 1); // no longer -1
 }
 
+TEST_CASE("imex_pem_tool_for — non-parallel mode returns -1", "[IMEX]") {
+    // Empty mode string (not in IMEX) and "primary" (IMEX present but not parallel) both
+    // short-circuit to bare-firmware PA/temp emission.
+    auto pem = make_pem({0, 1, 2});
+    REQUIRE(imex_pem_tool_for(0, "",        pem) == -1);
+    REQUIRE(imex_pem_tool_for(1, "primary", pem) == -1);
+    REQUIRE(imex_pem_tool_for(2, "primary", pem) == -1);
+}
+
+TEST_CASE("imex_pem_tool_for — parallel mode with empty pem returns -1", "[IMEX]") {
+    // Defense-in-depth for exotic profiles where pem never gets populated. get_at would
+    // throw on an empty pem; the helper must return -1 instead so the writer emits bare.
+    ConfigOptionInts empty_pem;
+    REQUIRE(imex_pem_tool_for(0, "copy_mode",   empty_pem) == -1);
+    REQUIRE(imex_pem_tool_for(3, "mirror_mode", empty_pem) == -1);
+}
+
+TEST_CASE("imex_pem_tool_for — identity pem routes filament to itself", "[IMEX]") {
+    // IDEX with printer_extruder_id = [1, 2] auto-derives pem = [0, 1]; non-MMU is identity.
+    auto pem = make_pem({0, 1});
+    REQUIRE(imex_pem_tool_for(0, "copy_mode", pem) == 0);
+    REQUIRE(imex_pem_tool_for(1, "copy_mode", pem) == 1);
+}
+
+TEST_CASE("imex_pem_tool_for — MMU collapse routes multiple logical slots to one physical", "[IMEX]") {
+    // 7-slot printer: first four slots share physical extruder 0 (a 4-lane MMU),
+    // slots 4/5/6 are independent on 1/2/3. Filament index is the logical slot;
+    // the helper returns the physical extruder carrying it.
+    auto pem = make_pem({0, 0, 0, 0, 1, 2, 3});
+    REQUIRE(imex_pem_tool_for(0, "copy_mode", pem) == 0);
+    REQUIRE(imex_pem_tool_for(3, "copy_mode", pem) == 0); // MMU collapse: T3 logical → T0 physical
+    REQUIRE(imex_pem_tool_for(6, "copy_mode", pem) == 3);
+}
+
 TEST_CASE("first_filament_for_physical_head — identity pem", "[IMEX]") {
     auto pem = make_pem({0, 1, 2, 3});
     REQUIRE(first_filament_for_physical_head(pem, 0) == 0);

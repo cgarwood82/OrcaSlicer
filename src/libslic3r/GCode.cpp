@@ -7589,13 +7589,7 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
             // In IMEX parallel modes each carriage needs an explicit tool address.
             // In primary mode (single active tool) regular tool changes handle PA
             // so no qualifier is needed — same as a non-IMEX printer.
-            // Guard the pem lookup: PrintApply populates pem when printer_extruder_id
-            // is set, but defense-in-depth prevents a throw from get_at on any
-            // empty-pem path that might slip through in exotic profiles.
-            const bool imex_parallel = !m_imex_parallel_mode.empty() && m_imex_parallel_mode != "primary";
-            const int pa_tool = (imex_parallel && !m_config.physical_extruder_map.values.empty())
-                ? m_config.physical_extruder_map.get_at((int)new_filament_id)
-                : -1;
+            const int pa_tool = imex_pem_tool_for((int)new_filament_id, m_imex_parallel_mode, m_config.physical_extruder_map);
             gcode += m_writer.set_pressure_advance(m_config.pressure_advance.get_at(new_filament_id), pa_tool);
             // Orca: Adaptive PA
             // Reset Adaptive PA processor last PA value
@@ -7895,11 +7889,7 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
         gcode += m_ooze_prevention.post_toolchange(*this);
 
     if (m_config.enable_pressure_advance.get_at(new_filament_id)) {
-        // Empty-pem guard mirrors the earlier PA site; get_at throws on empty values.
-        const bool imex_parallel = !m_imex_parallel_mode.empty() && m_imex_parallel_mode != "primary";
-        const int pa_tool = (imex_parallel && !m_config.physical_extruder_map.values.empty())
-            ? m_config.physical_extruder_map.get_at((int)new_filament_id)
-            : -1;
+        const int pa_tool = imex_pem_tool_for((int)new_filament_id, m_imex_parallel_mode, m_config.physical_extruder_map);
         gcode += m_writer.set_pressure_advance(m_config.pressure_advance.get_at(new_filament_id), pa_tool);
         // Orca: Adaptive PA
         // Reset Adaptive PA processor last PA value
