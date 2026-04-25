@@ -160,6 +160,37 @@ std::map<int,int> parse_imex_head_filament_map(const std::string& s)
     return result;
 }
 
+int imex_primary_logical_from_objects(const std::vector<int>&  used_slots_1b,
+                                      const ConfigOptionInts&  pem,
+                                      int                       primary_physical)
+{
+    if (pem.values.empty()) return -1;
+    const int pem_size = (int)pem.values.size();
+    for (int slot_1b : used_slots_1b) {
+        const int slot_0b = slot_1b - 1;
+        if (slot_0b >= 0 && slot_0b < pem_size && pem.values[slot_0b] == primary_physical)
+            return slot_0b;
+    }
+    return -1;
+}
+
+std::vector<int> imex_secondary_logical_slots(const std::vector<int>&   active_physicals,
+                                              int                        primary_physical,
+                                              const std::map<int,int>&  plate_head_filament_map,
+                                              const ConfigOptionInts&   pem)
+{
+    std::vector<int> out;
+    std::unordered_set<int> seen;
+    for (int phys : active_physicals) {
+        if (phys == primary_physical) continue;
+        const int logical = resolve_filament_for_head(plate_head_filament_map, pem, phys);
+        if (logical < 0) continue;
+        if (seen.insert(logical).second)
+            out.push_back(logical);
+    }
+    return out;
+}
+
 int resolve_filament_for_head(const std::map<int,int>& plate_map,
                               const ConfigOptionInts&  pem,
                               int                       physical)

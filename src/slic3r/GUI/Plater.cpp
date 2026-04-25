@@ -10040,13 +10040,13 @@ static std::vector<wxString> collect_imex_warnings(PartPlate* plate)
 
     auto logical_for_primary = [&](int physical_idx) -> int {
         // get_extruders() returns 1-based filament slots used by objects on this plate.
-        const std::vector<int> used_slots_1b = plate->get_extruders(true);
-        for (int slot_1b : used_slots_1b) {
-            const int slot_0b = slot_1b - 1;
-            if (slot_0b >= 0 && slot_0b < (int)pem.values.size()
-                && pem.values[slot_0b] == physical_idx)
-                return slot_0b;
-        }
+        const int from_objects = imex_primary_logical_from_objects(
+            plate->get_extruders(true), pem, physical_idx);
+        if (from_objects >= 0) return from_objects;
+        // No object on the plate routes to this physical: defensive fallback so the
+        // warning still has *something* to name. In practice this shouldn't fire when
+        // the active mode says this physical is primary — there has to be something
+        // assigned to it for the slicer to print.
         return first_filament_for_physical_head(pem, physical_idx);
     };
     auto logical_for_secondary = [&](int physical_idx) -> int {

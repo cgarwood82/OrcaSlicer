@@ -2896,12 +2896,10 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         const int primary_physical = pem.values.empty()
             ? -1
             : pem.get_at((int)initial_extruder_id);
-        for (int phys_tool : get_imex_active_tools(print)) {
-            if (phys_tool == primary_physical) continue;
-            const int logical = resolve_filament_for_head(plate_head_map, pem, phys_tool);
-            if (logical >= 0 && logical < (int)is_extruder_used.size())
+        for (int logical : imex_secondary_logical_slots(
+                get_imex_active_tools(print), primary_physical, plate_head_map, pem))
+            if (logical < (int)is_extruder_used.size())
                 is_extruder_used[logical] = true;
-        }
     }
 
     this->placeholder_parser().set("is_extruder_used", new ConfigOptionBools(is_extruder_used));

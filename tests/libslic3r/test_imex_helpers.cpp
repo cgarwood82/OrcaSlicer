@@ -128,6 +128,88 @@ TEST_CASE("has_mmu — empty / single-entry pem", "[IMEX]") {
     REQUIRE_FALSE(has_mmu(make_pem({0})));
 }
 
+TEST_CASE("imex_primary_logical_from_objects — AFC primary picks the object's slot", "[IMEX]") {
+    // User's Neo XP 0.6: pem maps slots 0-3 to physical 0 (4-lane AFC manifold),
+    // slots 4-6 to physicals 1/2/3.  Object assigned to 1-based slot 3 = 0-based 2.
+    auto pem = make_pem({0, 0, 0, 0, 1, 2, 3});
+    REQUIRE(imex_primary_logical_from_objects({3}, pem, 0) == 2);
+}
+
+TEST_CASE("imex_primary_logical_from_objects — multi-color AFC primary returns first match", "[IMEX]") {
+    // Two objects on the AFC manifold (slots 0 and 2 in 1-based = slots 0 and 2 in
+    // 0-based wait that's wrong let me redo).  Two objects: 1-based slots 1 and 3
+    // (= 0-based 0 and 2).  Both route to physical 0 via pem.  First in input wins.
+    auto pem = make_pem({0, 0, 0, 0, 1, 2, 3});
+    REQUIRE(imex_primary_logical_from_objects({1, 3}, pem, 0) == 0); // first match
+    REQUIRE(imex_primary_logical_from_objects({3, 1}, pem, 0) == 2); // order matters
+}
+
+TEST_CASE("imex_primary_logical_from_objects — direct extruder primary unambiguous", "[IMEX]") {
+    // Object on 1-based slot 5 = 0-based 4 (direct extruder T1 in the user's layout).
+    auto pem = make_pem({0, 0, 0, 0, 1, 2, 3});
+    REQUIRE(imex_primary_logical_from_objects({5}, pem, 1) == 4);
+}
+
+TEST_CASE("imex_primary_logical_from_objects — no object routed to primary returns -1", "[IMEX]") {
+    // Object on 1-based slot 5 (= physical 1) but primary_physical is 0.  No object
+    // on the plate routes to T0 — caller should fall back / treat as missing.
+    auto pem = make_pem({0, 0, 0, 0, 1, 2, 3});
+    REQUIRE(imex_primary_logical_from_objects({5}, pem, 0) == -1);
+}
+
+TEST_CASE("imex_primary_logical_from_objects — empty inputs", "[IMEX]") {
+    auto pem = make_pem({0, 0, 0, 0, 1, 2, 3});
+    REQUIRE(imex_primary_logical_from_objects({}, pem, 0) == -1);  // no objects
+    ConfigOptionInts empty_pem;
+    REQUIRE(imex_primary_logical_from_objects({1, 3}, empty_pem, 0) == -1); // empty pem
+}
+
+TEST_CASE("imex_secondary_logical_slots — copy mode skips primary, falls back to first-routed", "[IMEX]") {
+    // User's setup: copy mode active = [0, 1] (T0 primary, T1 copy), no plate map override.
+    // Secondary T1 should resolve to first slot whose pem is 1 = slot 4.
+    auto pem = make_pem({0, 0, 0, 0, 1, 2, 3});
+    auto out = imex_secondary_logical_slots({0, 1}, /*primary*/0, /*plate_map*/{}, pem);
+    REQUIRE(out == std::vector<int>{4});
+}
+
+TEST_CASE("imex_secondary_logical_slots — IQEX 4-mode enumerates all secondaries", "[IMEX]") {
+    // iq-copy / iq-mirror: active = [0, 1, 2, 3], primary = 0.
+    auto pem = make_pem({0, 0, 0, 0, 1, 2, 3});
+    auto out = imex_secondary_logical_slots({0, 1, 2, 3}, /*primary*/0, /*plate_map*/{}, pem);
+    REQUIRE(out == std::vector<int>{4, 5, 6}); // first slot for each physical 1, 2, 3
+}
+
+TEST_CASE("imex_secondary_logical_slots — per-plate override wins for secondary", "[IMEX]") {
+    // User picks slot 6 (1-based) for T1 via the IMEX ghost picker.  plate_map[1] = 6.
+    // resolve_filament_for_head should subtract 1: 0-based slot 5.
+    auto pem = make_pem({0, 0, 0, 0, 1, 2, 3});
+    std::map<int, int> plate_map{{1, 6}};
+    auto out = imex_secondary_logical_slots({0, 1}, /*primary*/0, plate_map, pem);
+    REQUIRE(out == std::vector<int>{5});
+}
+
+TEST_CASE("imex_secondary_logical_slots — drops unrouted physicals, deduplicates", "[IMEX]") {
+    // pem only has 2 entries (slot 0 -> phys 0, slot 1 -> phys 1).  active includes
+    // a phys 2 that has no logical → should be dropped.  Also: same pem has both
+    // slots routing to the same physical to test dedup.
+    auto pem = make_pem({0, 1});
+    auto out = imex_secondary_logical_slots({0, 1, 2}, /*primary*/0, {}, pem);
+    REQUIRE(out == std::vector<int>{1}); // phys 2 unrouted, primary skipped, only phys 1's slot 1 left
+
+    // Dedup: two physicals resolving to the same logical (via plate_map override).
+    std::map<int, int> dup_map{{1, 1}, {2, 1}}; // both T1 and T2 → 1-based slot 1 = 0-based 0
+    auto pem2 = make_pem({0, 0, 0});
+    auto out2 = imex_secondary_logical_slots({0, 1, 2}, /*primary*/0, dup_map, pem2);
+    REQUIRE(out2 == std::vector<int>{0}); // both secondaries point at slot 0; only emitted once
+}
+
+TEST_CASE("imex_secondary_logical_slots — only-primary-active returns empty", "[IMEX]") {
+    // Primary mode (just T0 active) → no secondaries.
+    auto pem = make_pem({0, 0, 0, 0, 1, 2, 3});
+    auto out = imex_secondary_logical_slots({0}, /*primary*/0, {}, pem);
+    REQUIRE(out.empty());
+}
+
 TEST_CASE("parse_imex_head_filament_map — round-trip", "[IMEX]") {
     auto m = parse_imex_head_filament_map("0:3,4:5");
     REQUIRE(m.size() == 2);

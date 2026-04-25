@@ -129,6 +129,37 @@ int resolve_filament_for_head(const std::map<int,int>& plate_map,
                               const ConfigOptionInts&  pem,
                               int                       physical);
 
+// Returns the 0-based logical filament slot the IMEX *primary* tool prints with,
+// based on what the plate's objects are actually assigned to. Walks `used_slots_1b`
+// (1-based filament indices, e.g. from PartPlate::get_extruders) and returns the
+// first one whose pem entry maps to `primary_physical`. Returns -1 if no object on
+// the plate routes to the primary's physical extruder, or if pem is empty.
+//
+// On non-MMU/non-AFC printers (one logical per physical) this is unambiguous; on
+// AFC layouts where multiple logicals route to one physical, the first match wins
+// — sufficient for warning labels and is_extruder_used marking. Multi-color
+// primaries on the AFC manifold may want all matches; that's a separate iteration.
+int imex_primary_logical_from_objects(const std::vector<int>&  used_slots_1b,
+                                      const ConfigOptionInts&  pem,
+                                      int                       primary_physical);
+
+// Returns the 0-based logical filament slots that IMEX *secondary* carriages
+// will load during the print. Iterates `active_physicals` (the set returned by
+// imex_mode_active_tools parsing — physical extruder indices), skips entries
+// equal to `primary_physical` (the primary is owned by tool_ordering /
+// per-object filament assignment, not enumerated here), and resolves each
+// remaining physical via `resolve_filament_for_head` (per-plate override
+// first, then first_filament_for_physical_head as fallback).
+//
+// Returned slots are deduplicated and -1 entries (no routing found) are
+// dropped. Use this for is_extruder_used marking and pre-slice warnings'
+// secondary lookup; the caller still owns whatever it does with the slots
+// (mark a bool array, compare temps, etc.).
+std::vector<int> imex_secondary_logical_slots(const std::vector<int>&   active_physicals,
+                                              int                        primary_physical,
+                                              const std::map<int,int>&  plate_head_filament_map,
+                                              const ConfigOptionInts&   pem);
+
 enum class ImexRole { Primary, Copy, Mirror };
 
 // Parses `imex_mode_active_tools[mode]` into a list of (physical_head, role) pairs.
