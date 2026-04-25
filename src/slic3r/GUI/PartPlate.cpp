@@ -909,6 +909,18 @@ void PartPlate::calc_imex_zones()
 
 // Build a cache key from the current IDEX/IQEX config options, or "" if IDEX/IQEX is off.
 // Reads per-plate mode from m_config first, falling back to the process preset.
+//
+// Inputs that contribute to the key (any change must invalidate the IMEX zone cache):
+//   - active_mode (per-plate or process-preset fallback)
+//   - imex_tools_per_gantry, imex_gantry_count                  (grid shape)
+//   - imex_nozzle_clearance_x, imex_nozzle_clearance_y          (zone widths / collision strips)
+//   - imex_carriage_margin                                       (zone shrink)
+//
+// IMPORTANT: if you add a printer config option that affects zone geometry, ghost transforms,
+// or collision strips, it MUST be incorporated here — otherwise ghost meshes and zone overlays
+// will go stale silently after a config change. Float values are scaled by 10 before integer
+// cast so 0.1 mm steps invalidate the cache; if you add a float option needing finer precision,
+// adjust the scale.
 std::string PartPlate::build_imex_cache_key() const
 {
     if (!wxGetApp().preset_bundle)
