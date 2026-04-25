@@ -20,6 +20,48 @@ class PresetBundle;
 // plate mode equals this. Treat any value NOT equal to this as a parallel mode.
 inline constexpr const char* kImexPrimaryMode = "primary";
 
+// =============================================================================
+// PHYSICAL vs LOGICAL extruder indices — read this before adding a new IMEX call site
+// =============================================================================
+// IMEX has two distinct index spaces and they are NOT interchangeable on MMU/AFC
+// printers (where multiple logical filament slots share one physical extruder):
+//
+//   * PHYSICAL extruder index — identifies a hardware carriage / hotend.
+//     Source: `imex_mode_active_tools` ("0:P,1:C,2:M") and `printer_extruder_id`.
+//     Use for: user-facing labels (shown as "T0", "T1"...), per-firmware tool
+//     qualifiers (Klipper EXTRUDER=extruderN, RRF M572 D<N>, Marlin T<N>), and
+//     anything that addresses hardware.
+//
+//   * LOGICAL filament slot index — identifies one filament in the project.
+//     Source: indexing into per-filament arrays — `filament_presets`,
+//     `nozzle_temperature_initial_layer`, bed_temp arrays per plate type, etc.
+//     Use for: looking up filament data by slot.
+//
+// On a single-extruder or pure-IDEX printer the two indices coincide. On any
+// printer with `physical_extruder_map` size > 1 they diverge. Confusing them
+// produces silent wrong-filament behavior — the slicer reads the wrong filament
+// preset / temperature for a given carriage with no error or log line.
+//
+// Translate physical → logical via:
+//     resolve_filament_for_head(plate_head_filament_map, pem, physical_idx)
+// (or the simpler `first_filament_for_physical_head` if no per-plate override).
+//
+// The reverse translation (logical → physical) is just `pem.get_at(filament_id)`,
+// already encapsulated in `imex_pem_tool_for` for the per-tool-qualifier case.
+//
+// Past bugs in this class:
+//   - GCode PA emission used the inline `pem.get_at(filament_id)` form at two
+//     sites (consolidated into `imex_pem_tool_for` in c2492ccc47).
+//   - Pre-slice warnings indexed `filament_presets` directly by physical idx,
+//     causing wrong-filament names on AFC/MMU layouts (fixed in fbc58d2a1d).
+//   - Ghost color resolution had its own inline pem lookup with a stale default
+//     (centralized in `effective_physical_extruder_map` in 6a3de6a28f).
+//
+// New call sites: if you index a per-filament array, you need a logical index.
+// If you label a hardware carriage, use the physical index. When in doubt,
+// route through one of the helpers below.
+// =============================================================================
+
 // Returns the effective physical_extruder_map given an optionally-explicit map and
 // the printer's `printer_extruder_id`. If `explicit_pem` has size >= 2 the caller
 // authored one, and it is returned verbatim. Otherwise the map is auto-derived
