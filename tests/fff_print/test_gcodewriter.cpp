@@ -188,6 +188,125 @@ SCENARIO("set_pressure_advance emits Marlin Legacy form without tool qualifier e
     }
 }
 
+SCENARIO("set_temperature per-flavor command routing", "[GCodeWriter][Temperature]") {
+    GIVEN("temperature=210, no tool index, no wait") {
+        WHEN("flavor is Marlin 2") {
+            std::string out = GCodeWriter::set_temperature(210, gcfMarlinFirmware, false, -1, std::string());
+            THEN("output is M104 S210 with no tool qualifier") {
+                REQUIRE_THAT(out, Catch::Matchers::ContainsSubstring("M104 S210"));
+                REQUIRE_THAT(out, !Catch::Matchers::ContainsSubstring(" T"));
+                REQUIRE_THAT(out, !Catch::Matchers::ContainsSubstring("M109"));
+            }
+        }
+        WHEN("flavor is RepRapFirmware") {
+            std::string out = GCodeWriter::set_temperature(210, gcfRepRapFirmware, false, -1, std::string());
+            THEN("output is G10 S210 (M104 is deprecated on RRF)") {
+                REQUIRE_THAT(out, Catch::Matchers::ContainsSubstring("G10 S210"));
+                REQUIRE_THAT(out, !Catch::Matchers::ContainsSubstring("M104"));
+            }
+        }
+        WHEN("flavor is Mach3 or Machinekit") {
+            std::string mach3      = GCodeWriter::set_temperature(210, gcfMach3,      false, -1, std::string());
+            std::string machinekit = GCodeWriter::set_temperature(210, gcfMachinekit, false, -1, std::string());
+            THEN("output uses P-prefix for the value instead of S") {
+                REQUIRE_THAT(mach3,      Catch::Matchers::ContainsSubstring("M104 P210"));
+                REQUIRE_THAT(machinekit, Catch::Matchers::ContainsSubstring("M104 P210"));
+                REQUIRE_THAT(mach3,      !Catch::Matchers::ContainsSubstring("S210"));
+            }
+        }
+    }
+}
+
+SCENARIO("set_temperature wait=true handling per firmware", "[GCodeWriter][Temperature]") {
+    WHEN("flavor is Marlin 2 with wait") {
+        std::string out = GCodeWriter::set_temperature(210, gcfMarlinFirmware, true, -1, std::string());
+        THEN("output is M109 S210 (blocking wait)") {
+            REQUIRE_THAT(out, Catch::Matchers::ContainsSubstring("M109 S210"));
+            REQUIRE_THAT(out, !Catch::Matchers::ContainsSubstring("M104"));
+        }
+    }
+    WHEN("flavor is MakerWare or Sailfish with wait") {
+        std::string mw = GCodeWriter::set_temperature(210, gcfMakerWare, true, -1, std::string());
+        std::string sf = GCodeWriter::set_temperature(210, gcfSailfish,  true, -1, std::string());
+        THEN("output is empty — these flavors don't support blocking waits") {
+            REQUIRE(mw.empty());
+            REQUIRE(sf.empty());
+        }
+    }
+    WHEN("flavor is Teacup with wait") {
+        std::string out = GCodeWriter::set_temperature(210, gcfTeacup, true, -1, std::string());
+        THEN("output emits M104 + a separate M116 poll (Teacup doesn't support M109)") {
+            REQUIRE_THAT(out, Catch::Matchers::ContainsSubstring("M104 S210"));
+            REQUIRE_THAT(out, Catch::Matchers::ContainsSubstring("M116"));
+            REQUIRE_THAT(out, !Catch::Matchers::ContainsSubstring("M109"));
+        }
+    }
+    WHEN("flavor is RepRapFirmware with wait") {
+        std::string out = GCodeWriter::set_temperature(210, gcfRepRapFirmware, true, -1, std::string());
+        THEN("output emits G10 + M116 (same poll pattern as Teacup)") {
+            REQUIRE_THAT(out, Catch::Matchers::ContainsSubstring("G10 S210"));
+            REQUIRE_THAT(out, Catch::Matchers::ContainsSubstring("M116"));
+        }
+    }
+}
+
+SCENARIO("set_temperature per-tool qualifier routing for IMEX secondary carriages",
+         "[GCodeWriter][Temperature]") {
+    // IMEX secondary tools never go through a tool-change, so layer-change temperature
+    // for them is emitted via the tool-qualified static set_temperature overload.
+    GIVEN("temperature=220, tool=2, no wait") {
+        WHEN("flavor is Marlin 2") {
+            std::string out = GCodeWriter::set_temperature(220, gcfMarlinFirmware, false, 2, std::string());
+            THEN("output contains T2 qualifier") {
+                REQUIRE_THAT(out, Catch::Matchers::ContainsSubstring("M104 S220 T2"));
+            }
+        }
+        WHEN("flavor is RepRapFirmware") {
+            std::string out = GCodeWriter::set_temperature(220, gcfRepRapFirmware, false, 2, std::string());
+            THEN("output uses P-prefix for tool (RRF convention), not T") {
+                REQUIRE_THAT(out, Catch::Matchers::ContainsSubstring("G10 S220 P2"));
+                REQUIRE_THAT(out, !Catch::Matchers::ContainsSubstring(" T2"));
+            }
+        }
+        WHEN("flavor is Klipper") {
+            std::string out = GCodeWriter::set_temperature(220, gcfKlipper, false, 1, std::string());
+            THEN("output contains T1 qualifier (Klipper layer-change temperature uses T)") {
+                REQUIRE_THAT(out, Catch::Matchers::ContainsSubstring("M104 S220 T1"));
+            }
+        }
+    }
+}
+
+SCENARIO("set_temperature instance overload forces tool=-1 on single-extruder writers",
+         "[GCodeWriter][Temperature]") {
+    // Guards against spuriously emitting `T0` on printers that only have one extruder.
+    // The instance overload discards the tool argument when !multiple_extruders.
+    GIVEN("A default GCodeWriter (multiple_extruders=false)") {
+        GCodeWriter writer;
+        writer.config.gcode_flavor.value = gcfMarlinFirmware;
+
+        WHEN("set_temperature is called with tool=2") {
+            std::string out = writer.set_temperature(210, false, 2);
+            THEN("output has no T qualifier despite the caller passing tool=2") {
+                REQUIRE_THAT(out, Catch::Matchers::ContainsSubstring("M104 S210"));
+                REQUIRE_THAT(out, !Catch::Matchers::ContainsSubstring(" T"));
+            }
+        }
+    }
+    GIVEN("A GCodeWriter with multiple_extruders=true (not SEMM)") {
+        GCodeWriter writer;
+        writer.config.gcode_flavor.value = gcfMarlinFirmware;
+        writer.multiple_extruders = true;
+
+        WHEN("set_temperature is called with tool=2") {
+            std::string out = writer.set_temperature(210, false, 2);
+            THEN("tool argument passes through — output contains T2") {
+                REQUIRE_THAT(out, Catch::Matchers::ContainsSubstring("M104 S210 T2"));
+            }
+        }
+    }
+}
+
 SCENARIO("set_pressure_advance emits BBL M900 L1000 M10 regardless of tool index",
          "[GCodeWriter][PressureAdvance]") {
     GIVEN("A BBL-flagged GCodeWriter (the flag overrides firmware flavor routing)") {
