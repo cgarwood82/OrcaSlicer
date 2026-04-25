@@ -10018,12 +10018,28 @@ static std::vector<wxString> collect_imex_warnings(PartPlate* plate)
     const auto* bed_temps = bed_temp_key.empty() ? nullptr : full_cfg.option<ConfigOptionInts>(bed_temp_key);
     const auto& filament_presets = bundle->filament_presets;
 
-    // Primary tool's bed temp and filament type
-    const int primary_bed_temp = (bed_temps && primary_tool < (int)bed_temps->values.size())
-                                    ? bed_temps->values[primary_tool] : 0;
+    // active_tools and primary_tool are PHYSICAL extruder indices (parsed from
+    // imex_mode_active_tools). filament_presets and bed_temps are indexed by LOGICAL
+    // filament slot. For MMU/AFC layouts where multiple logical slots feed one
+    // physical extruder, looking up filament_presets[physical_idx] returns the wrong
+    // filament. Translate physical -> logical via the effective pem (with per-plate
+    // imex_head_filament_map override) before indexing.
+    const ConfigOptionInts pem = effective_physical_extruder_map(*bundle);
+    std::map<int, int> plate_head_map;
+    if (auto* hfm = plate->config()->option<ConfigOptionString>("imex_head_filament_map"))
+        plate_head_map = parse_imex_head_filament_map(hfm->value);
+    auto logical_for = [&](int physical_idx) -> int {
+        const int logical = resolve_filament_for_head(plate_head_map, pem, physical_idx);
+        return logical >= 0 ? logical : physical_idx; // fallback: identity if no routing found
+    };
+
+    // Primary tool's bed temp and filament type (looked up by logical slot)
+    const int primary_logical = logical_for(primary_tool);
+    const int primary_bed_temp = (bed_temps && primary_logical < (int)bed_temps->values.size())
+                                    ? bed_temps->values[primary_logical] : 0;
     std::string primary_display_type;
-    if (primary_tool < (int)filament_presets.size()) {
-        Preset* p = bundle->filaments.find_preset(filament_presets[primary_tool]);
+    if (primary_logical < (int)filament_presets.size()) {
+        Preset* p = bundle->filaments.find_preset(filament_presets[primary_logical]);
         if (p) p->get_filament_type(primary_display_type);
     }
     if (primary_display_type.empty()) primary_display_type = "unknown";
@@ -10032,16 +10048,18 @@ static std::vector<wxString> collect_imex_warnings(PartPlate* plate)
         const int tool_idx = active_tools[i];
         if (tool_idx == primary_tool) continue;
 
+        const int secondary_logical = logical_for(tool_idx);
+
         std::string secondary_display_type;
-        if (tool_idx < (int)filament_presets.size()) {
-            Preset* p = bundle->filaments.find_preset(filament_presets[tool_idx]);
+        if (secondary_logical < (int)filament_presets.size()) {
+            Preset* p = bundle->filaments.find_preset(filament_presets[secondary_logical]);
             if (p) p->get_filament_type(secondary_display_type);
         }
         if (secondary_display_type.empty()) secondary_display_type = "unknown";
 
         // Check 2: bed temperature — primary wins, secondary may not get what it needs
-        if (bed_temps && primary_bed_temp > 0 && tool_idx < (int)bed_temps->values.size()) {
-            const int secondary_bed_temp = bed_temps->values[tool_idx];
+        if (bed_temps && primary_bed_temp > 0 && secondary_logical < (int)bed_temps->values.size()) {
+            const int secondary_bed_temp = bed_temps->values[secondary_logical];
             if (secondary_bed_temp > 0 && std::abs(secondary_bed_temp - primary_bed_temp) > 5) {
                 warnings.push_back(wxString::Format(
                     _L("Bed temperature conflict: T%d (%s) sets the bed to %d\u00B0C \u2014 "
