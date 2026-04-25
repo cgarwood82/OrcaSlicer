@@ -1,7 +1,9 @@
 
 #include "libslic3r/Model.hpp"
 #include "libslic3r/Format/3mf.hpp"
+#include "libslic3r/Format/bbs_3mf.hpp"
 #include "libslic3r/Format/STL.hpp"
+#include "libslic3r/Utils.hpp"
 
 #include <boost/filesystem/operations.hpp>
 
@@ -130,6 +132,139 @@ SCENARIO("Export+Import geometry to/from 3mf file cycle", "[3mf]") {
                 REQUIRE(res);
             }
         }
+    }
+}
+
+SCENARIO("BBS 3MF round-trips per-plate IMEX state (parallel mode + head filament map)", "[3mf][IMEX]") {
+    // Regression guard for the class of bug where per-plate state silently drops through
+    // save/load (the variant-truncation bug was the precipitating example; IMEX plate state
+    // rides the same XML metadata path and is equally vulnerable).
+    // BBS exporter scaffolds a backup dir under temporary_dir() for the project config file;
+    // point it at a writable location for the test process.
+    set_temporary_dir(boost::filesystem::temp_directory_path().string());
+
+    GIVEN("A Model with a single object on plate 0 and IMEX plate state set") {
+        Model src_model;
+        std::string src_file = std::string(TEST_DATA_DIR) + "/test_3mf/Prusa.stl";
+        REQUIRE(load_stl(src_file.c_str(), &src_model));
+        src_model.add_default_instances();
+
+        DynamicPrintConfig src_config;
+
+        PlateDataPtrs src_plates;
+        auto *plate0 = new PlateData();
+        plate0->plate_index = 0;
+        plate0->config.set_key_value("imex_parallel_mode",     new ConfigOptionString("copy_mode"));
+        plate0->config.set_key_value("imex_head_filament_map", new ConfigOptionString("1:2,2:3"));
+        src_plates.push_back(plate0);
+
+        WHEN("the model is saved to BBS 3MF and loaded back") {
+            std::string test_file = std::string(TEST_DATA_DIR) + "/test_3mf/imex_roundtrip.3mf";
+
+            StoreParams store_params;
+            store_params.path            = test_file.c_str();
+            store_params.model           = &src_model;
+            store_params.plate_data_list = src_plates;
+            store_params.config          = &src_config;
+            REQUIRE(store_bbs_3mf(store_params));
+
+            Model dst_model;
+            DynamicPrintConfig dst_config;
+            PlateDataPtrs dst_plates;
+            std::vector<Preset*> dst_presets;
+            bool is_bbl = false;
+            Semver file_version;
+            ConfigSubstitutionContext ctxt{ ForwardCompatibilitySubstitutionRule::Disable };
+            bool loaded = load_bbs_3mf(test_file.c_str(), &dst_config, &ctxt, &dst_model,
+                                       &dst_plates, &dst_presets, &is_bbl, &file_version);
+            boost::filesystem::remove(test_file);
+
+            THEN("load succeeds") {
+                REQUIRE(loaded);
+            }
+            THEN("the loaded plate list has the same number of plates") {
+                REQUIRE(dst_plates.size() == src_plates.size());
+            }
+            THEN("imex_parallel_mode round-trips with its original value") {
+                REQUIRE(dst_plates.size() >= 1);
+                auto *mode_opt = dst_plates[0]->config.option<ConfigOptionString>("imex_parallel_mode");
+                REQUIRE(mode_opt != nullptr);
+                REQUIRE(mode_opt->value == "copy_mode");
+            }
+            THEN("imex_head_filament_map round-trips with its original value") {
+                REQUIRE(dst_plates.size() >= 1);
+                auto *hfm_opt = dst_plates[0]->config.option<ConfigOptionString>("imex_head_filament_map");
+                REQUIRE(hfm_opt != nullptr);
+                REQUIRE(hfm_opt->value == "1:2,2:3");
+            }
+
+            release_PlateData_list(dst_plates);
+        }
+
+        release_PlateData_list(src_plates);
+    }
+}
+
+SCENARIO("BBS 3MF does not emit IMEX metadata when plate is in primary mode", "[3mf][IMEX]") {
+    // The serialization guard short-circuits when the mode is empty or "primary", so loading
+    // a plate that was saved in primary mode must not leave a stale imex_parallel_mode option
+    // on the plate's config. If this regressed, we'd see ghost "primary" strings appearing on
+    // plates that had no IMEX state at all.
+    set_temporary_dir(boost::filesystem::temp_directory_path().string());
+
+    GIVEN("A Model with plate 0 in primary mode and an empty head-filament map") {
+        Model src_model;
+        std::string src_file = std::string(TEST_DATA_DIR) + "/test_3mf/Prusa.stl";
+        REQUIRE(load_stl(src_file.c_str(), &src_model));
+        src_model.add_default_instances();
+
+        DynamicPrintConfig src_config;
+        PlateDataPtrs src_plates;
+        auto *plate0 = new PlateData();
+        plate0->plate_index = 0;
+        plate0->config.set_key_value("imex_parallel_mode",     new ConfigOptionString("primary"));
+        plate0->config.set_key_value("imex_head_filament_map", new ConfigOptionString(""));
+        src_plates.push_back(plate0);
+
+        WHEN("the model is saved to BBS 3MF and loaded back") {
+            std::string test_file = std::string(TEST_DATA_DIR) + "/test_3mf/imex_primary_roundtrip.3mf";
+
+            StoreParams store_params;
+            store_params.path            = test_file.c_str();
+            store_params.model           = &src_model;
+            store_params.plate_data_list = src_plates;
+            store_params.config          = &src_config;
+            REQUIRE(store_bbs_3mf(store_params));
+
+            Model dst_model;
+            DynamicPrintConfig dst_config;
+            PlateDataPtrs dst_plates;
+            std::vector<Preset*> dst_presets;
+            bool is_bbl = false;
+            Semver file_version;
+            ConfigSubstitutionContext ctxt{ ForwardCompatibilitySubstitutionRule::Disable };
+            bool loaded = load_bbs_3mf(test_file.c_str(), &dst_config, &ctxt, &dst_model,
+                                       &dst_plates, &dst_presets, &is_bbl, &file_version);
+            boost::filesystem::remove(test_file);
+
+            THEN("load succeeds") {
+                REQUIRE(loaded);
+            }
+            THEN("the loaded plate has no imex_parallel_mode option set (primary is not serialized)") {
+                REQUIRE(dst_plates.size() >= 1);
+                auto *mode_opt = dst_plates[0]->config.option<ConfigOptionString>("imex_parallel_mode");
+                REQUIRE(mode_opt == nullptr);
+            }
+            THEN("the loaded plate has no imex_head_filament_map option set (empty is not serialized)") {
+                REQUIRE(dst_plates.size() >= 1);
+                auto *hfm_opt = dst_plates[0]->config.option<ConfigOptionString>("imex_head_filament_map");
+                REQUIRE(hfm_opt == nullptr);
+            }
+
+            release_PlateData_list(dst_plates);
+        }
+
+        release_PlateData_list(src_plates);
     }
 }
 
