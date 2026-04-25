@@ -2869,22 +2869,35 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     for (unsigned int extruder : tool_ordering.all_extruders())
         is_extruder_used[extruder] = true;
 
-    // Orca IMEX: also mark the LOGICAL filament slot that each active secondary
-    // carriage will load during the print. is_extruder_used is logical-slot indexed
+    // Orca IMEX: mark the LOGICAL filament slot each active SECONDARY carriage
+    // will load during the print.  is_extruder_used is logical-slot indexed
     // (consumed as `is_extruder_used[N]` in machine_start_gcode templates), but
-    // get_imex_active_tools returns PHYSICAL extruder indices. On any printer with
-    // physical_extruder_map size > 1 (MMU/AFC), writing the physical index into a
-    // logical-indexed array marks the wrong slot — start-gcode templates would emit
-    // the wrong filament's temp / not emit the correct one.
+    // get_imex_active_tools returns PHYSICAL extruder indices.  On any printer
+    // with physical_extruder_map size > 1 (MMU/AFC), writing the physical index
+    // into a logical-indexed array marks the wrong slot.
     //
-    // Translate physical -> logical via the per-plate imex_head_filament_map (set by
-    // the IMEX ghost picker), with first_filament_for_physical_head as the fallback
-    // when no override is set.
-    if (print.config().is_imex.value && !print.objects().empty()) {
+    // The primary is intentionally SKIPPED here — its filament is already
+    // covered by tool_ordering.all_extruders() above (which lists the slots the
+    // objects on the plate are actually assigned to).  Marking the primary
+    // again via the pem `first_filament_for_physical_head` fallback would
+    // pollute is_extruder_used with the *first* slot routed to the primary's
+    // physical extruder, which is generally not the slot the user assigned to
+    // the printing object.  Same skip-primary pattern as the IMEX PA emission
+    // path (GCode.cpp ~3265).
+    //
+    // For secondaries: translate physical -> logical via the per-plate
+    // imex_head_filament_map (set by the IMEX ghost picker), with
+    // first_filament_for_physical_head as the fallback when no override is set.
+    if (print.config().is_imex.value && !print.objects().empty()
+        && initial_extruder_id != (unsigned int)-1) {
         const auto plate_head_map = parse_imex_head_filament_map(
             print.objects().front()->config().imex_head_filament_map.value);
         const ConfigOptionInts& pem = print.config().physical_extruder_map;
+        const int primary_physical = pem.values.empty()
+            ? -1
+            : pem.get_at((int)initial_extruder_id);
         for (int phys_tool : get_imex_active_tools(print)) {
+            if (phys_tool == primary_physical) continue;
             const int logical = resolve_filament_for_head(plate_head_map, pem, phys_tool);
             if (logical >= 0 && logical < (int)is_extruder_used.size())
                 is_extruder_used[logical] = true;
