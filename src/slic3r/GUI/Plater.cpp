@@ -10022,19 +10022,40 @@ static std::vector<wxString> collect_imex_warnings(PartPlate* plate)
     // imex_mode_active_tools). filament_presets and bed_temps are indexed by LOGICAL
     // filament slot. For MMU/AFC layouts where multiple logical slots feed one
     // physical extruder, looking up filament_presets[physical_idx] returns the wrong
-    // filament. Translate physical -> logical via the effective pem (with per-plate
-    // imex_head_filament_map override) before indexing.
+    // filament. Translate physical -> logical before indexing.
+    //
+    // Primary vs secondary use DIFFERENT translation rules:
+    //   - Primary's filament: the slot the user assigned to the printing object(s).
+    //     Walk plate->get_extruders() and pick a slot whose pem entry maps to the
+    //     primary's physical index. If multiple slots qualify, the first match wins.
+    //   - Secondary's filament: per-plate imex_head_filament_map override (set via
+    //     the IMEX ghost picker). No object owns a secondary in copy/mirror mode —
+    //     the firmware duplicates the primary, so the override is the only source.
+    //   - Both fall back to first_filament_for_physical_head as a last resort so a
+    //     warning still has *some* filament to name.
     const ConfigOptionInts pem = effective_physical_extruder_map(*bundle);
     std::map<int, int> plate_head_map;
     if (auto* hfm = plate->config()->option<ConfigOptionString>("imex_head_filament_map"))
         plate_head_map = parse_imex_head_filament_map(hfm->value);
-    auto logical_for = [&](int physical_idx) -> int {
+
+    auto logical_for_primary = [&](int physical_idx) -> int {
+        // get_extruders() returns 1-based filament slots used by objects on this plate.
+        const std::vector<int> used_slots_1b = plate->get_extruders(true);
+        for (int slot_1b : used_slots_1b) {
+            const int slot_0b = slot_1b - 1;
+            if (slot_0b >= 0 && slot_0b < (int)pem.values.size()
+                && pem.values[slot_0b] == physical_idx)
+                return slot_0b;
+        }
+        return first_filament_for_physical_head(pem, physical_idx);
+    };
+    auto logical_for_secondary = [&](int physical_idx) -> int {
         const int logical = resolve_filament_for_head(plate_head_map, pem, physical_idx);
-        return logical >= 0 ? logical : physical_idx; // fallback: identity if no routing found
+        return logical >= 0 ? logical : physical_idx;
     };
 
     // Primary tool's bed temp and filament type (looked up by logical slot)
-    const int primary_logical = logical_for(primary_tool);
+    const int primary_logical = logical_for_primary(primary_tool);
     const int primary_bed_temp = (bed_temps && primary_logical < (int)bed_temps->values.size())
                                     ? bed_temps->values[primary_logical] : 0;
     std::string primary_display_type;
@@ -10048,7 +10069,7 @@ static std::vector<wxString> collect_imex_warnings(PartPlate* plate)
         const int tool_idx = active_tools[i];
         if (tool_idx == primary_tool) continue;
 
-        const int secondary_logical = logical_for(tool_idx);
+        const int secondary_logical = logical_for_secondary(tool_idx);
 
         std::string secondary_display_type;
         if (secondary_logical < (int)filament_presets.size()) {
