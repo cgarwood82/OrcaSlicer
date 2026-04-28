@@ -543,6 +543,24 @@ static const t_config_enum_values s_keys_map_FilamentMapMode = {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(FilamentMapMode)
 
+// IMEX: keep the legacy hyphenated wire strings so existing presets / 3MFs
+// deserialize unchanged after the coString -> coEnum migration.
+static const t_config_enum_values s_keys_map_ImexToolLayout = {
+    { "front-left",  int(ImexToolLayout::FrontLeft)  },
+    { "front-right", int(ImexToolLayout::FrontRight) },
+    { "rear-left",   int(ImexToolLayout::RearLeft)   },
+    { "rear-right",  int(ImexToolLayout::RearRight)  }
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(ImexToolLayout)
+
+static const t_config_enum_values s_keys_map_ImexVizTheme = {
+    { "standard",      int(ImexVizTheme::Standard)      },
+    { "deuteranopia",  int(ImexVizTheme::Deuteranopia)  },
+    { "tritanopia",    int(ImexVizTheme::Tritanopia)    },
+    { "high_contrast", int(ImexVizTheme::HighContrast)  }
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(ImexVizTheme)
+
 
 //BBS
 std::string get_extruder_variant_string(ExtruderType extruder_type, NozzleVolumeType nozzle_volume_type)
@@ -5561,13 +5579,22 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(2));
 
-    def = this->add("imex_tool_layout", coString);
+    def = this->add("imex_tool_layout", coEnum);
     def->label = L("Tool 0 Corner");
     def->tooltip = L("Physical corner of the bed where tool T0 (index 0) is located. "
                      "Determines how tool indices map to bed zones. "
                      "front = lower Y (near the operator), rear = higher Y (back of machine).");
     def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionString("front-left"));
+    def->enum_keys_map = &ConfigOptionEnum<ImexToolLayout>::get_enum_values();
+    def->enum_values.push_back("front-left");
+    def->enum_values.push_back("front-right");
+    def->enum_values.push_back("rear-left");
+    def->enum_values.push_back("rear-right");
+    def->enum_labels.push_back(L("Front-left"));
+    def->enum_labels.push_back(L("Front-right"));
+    def->enum_labels.push_back(L("Rear-left"));
+    def->enum_labels.push_back(L("Rear-right"));
+    def->set_default_value(new ConfigOptionEnum<ImexToolLayout>(ImexToolLayout::FrontLeft));
 
     def = this->add("imex_nozzle_clearance_x", coFloat);
     def->label = L("Nozzle Clearance X");
@@ -5594,11 +5621,20 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(0.0));
 
-    def = this->add("imex_viz_theme", coString);
+    def = this->add("imex_viz_theme", coEnum);
     def->label = L("Visualization Theme");
     def->tooltip = L("Color theme for IDEX/IQEX bed zone visualization. Choose a colorblind-friendly theme if needed.");
     def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionString("standard"));
+    def->enum_keys_map = &ConfigOptionEnum<ImexVizTheme>::get_enum_values();
+    def->enum_values.push_back("standard");
+    def->enum_values.push_back("deuteranopia");
+    def->enum_values.push_back("tritanopia");
+    def->enum_values.push_back("high_contrast");
+    def->enum_labels.push_back(L("Standard"));
+    def->enum_labels.push_back(L("Deuteranopia / Protanopia (red-green)"));
+    def->enum_labels.push_back(L("Tritanopia (blue-yellow)"));
+    def->enum_labels.push_back(L("High Contrast"));
+    def->set_default_value(new ConfigOptionEnum<ImexVizTheme>(ImexVizTheme::Standard));
 
     def = this->add("imex_parallel_mode", coString);
     def->label = L("IDEX/IQEX Print Mode");
@@ -5628,6 +5664,20 @@ void PrintConfigDef::init_fff_params()
     def = this->add("imex_mode_gcodes", coStrings);
     def->label = L("IDEX/IQEX Mode G-codes");
     def->tooltip = L("G-code or macro call to inject at print start for each mode.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionStrings());
+
+    // Mode-type tag drives how zones, ghosts, and slice-time validation interpret a
+    // given mode entry. Parallel to imex_mode_names. Values: "primary", "copy",
+    // "mirror", "split". Empty / missing entries fall back to "primary" except for
+    // entries named "copy" or "mirror" (legacy compat with pre-type configs).
+    def = this->add("imex_mode_types", coStrings);
+    def->label = L("IDEX/IQEX Mode Types");
+    def->tooltip = L("Per-mode topology tag. \"copy\" / \"mirror\" produce one ghost per "
+                     "non-primary tool at the corresponding mirrored/copied position. "
+                     "\"split\" splits the bed in half along the gantry axis and aggregates "
+                     "each gantry's tools into a single multi-color print region — used "
+                     "for paired-gantry IQEX multi-color printing.");
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionStrings());
 

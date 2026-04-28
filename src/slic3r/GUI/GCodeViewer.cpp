@@ -1655,10 +1655,10 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
 
                         // Apply the same flip logic as PartPlate::calc_imex_zones() so physical
                         // grid positions match the bed zone visualization.
-                        auto* layout_opt = printer_cfg.opt<ConfigOptionString>("imex_tool_layout");
-                        const std::string layout_str = layout_opt ? layout_opt->value : "front-left";
-                        const bool flip_x = (layout_str == "front-right" || layout_str == "rear-right");
-                        const bool flip_y = (layout_str == "rear-left"   || layout_str == "rear-right");
+                        auto* layout_opt = printer_cfg.opt<ConfigOptionEnum<ImexToolLayout>>("imex_tool_layout");
+                        const ImexToolLayout layout = layout_opt ? layout_opt->value : ImexToolLayout::FrontLeft;
+                        const bool flip_x = (layout == ImexToolLayout::FrontRight || layout == ImexToolLayout::RearRight);
+                        const bool flip_y = (layout == ImexToolLayout::RearLeft   || layout == ImexToolLayout::RearRight);
 
                         auto phys_col_of = [&](int tid) -> int {
                             int raw = tid % tools_per_gantry;
@@ -1791,7 +1791,11 @@ void GCodeViewer::render(int canvas_width, int canvas_height, int right_margin)
 
     // IDEX/IQEX: render toolhead footprint boxes for each active carriage.
     // Each box is imex_nozzle_clearance_x × imex_nozzle_clearance_y, sitting above the nozzle tip.
-    if (!carriage_box_draws.empty() && imex_box_wx > 0.0f && imex_box_wy > 0.0f) {
+    // Hidden when the user toggles off "Show IDEX/IQEX Toolhead Boxes" in the View menu — gives
+    // an unobstructed view of the toolpaths during sequential playback. Default-on; the absence
+    // of an app_config entry is also treated as on.
+    const bool show_toolhead_boxes = wxGetApp().app_config->get("show_imex_toolhead_boxes") != "false";
+    if (show_toolhead_boxes && !carriage_box_draws.empty() && imex_box_wx > 0.0f && imex_box_wy > 0.0f) {
         // Rebuild box mesh every frame — dimensions can change via config edit without a
         // G-code reload, so dimension-based caching isn't safe.
         // Mesh origin: nozzle at x=0, centered in Y, Z starts at nozzle tip level.

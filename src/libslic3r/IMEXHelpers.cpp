@@ -41,6 +41,101 @@ int imex_pem_tool_for(int filament_id, const std::string& parallel_mode, const C
     return pem.get_at(filament_id);
 }
 
+bool imex_suppresses_bare_toolchange(const std::string& parallel_mode, unsigned int toolchange_count)
+{
+    return toolchange_count <= 1
+        && !parallel_mode.empty()
+        && parallel_mode != kImexPrimaryMode;
+}
+
+std::string imex_mode_type_for(const std::string& mode_name,
+                               const std::vector<std::string>& mode_names,
+                               const std::vector<std::string>& mode_types)
+{
+    if (mode_name.empty() || mode_name == kImexPrimaryMode)
+        return kImexModeTypePrimary;
+    // Look up the parallel-vector entry by index match.
+    for (size_t i = 0; i < mode_names.size(); ++i) {
+        if (mode_names[i] != mode_name) continue;
+        if (i < mode_types.size() && !mode_types[i].empty())
+            return mode_types[i];
+        break; // entry found but no type set → fall through to inference
+    }
+    // Legacy fallback: a mode literally named "copy" / "mirror" / "split" was authored
+    // before imex_mode_types existed. Take the name as the type.
+    if (mode_name == kImexModeTypeCopy ||
+        mode_name == kImexModeTypeMirror ||
+        mode_name == kImexModeTypeSplit)
+        return mode_name;
+    return kImexModeTypePrimary;
+}
+
+std::string imex_multicolor_block_reason(const std::string& parallel_mode,
+                                         const std::string& mode_type,
+                                         const std::string& active_tools_str,
+                                         int tools_per_gantry,
+                                         const std::vector<int>& used_filaments_0b,
+                                         const ConfigOptionInts& pem)
+{
+    // Not an IMEX parallel print → nothing to validate here.
+    if (parallel_mode.empty() || parallel_mode == kImexPrimaryMode) return {};
+    // Single-color prints have no toolchanges to constrain.
+    if (used_filaments_0b.size() <= 1) return {};
+
+    // MMU lane sharing detection: two or more used filaments routed to the same
+    // physical head means a mid-print MMU swap on that head, which IMEX parallel
+    // modes can't slave to the secondary gantry. Applies to all parallel mode
+    // types including Split — even Split can't replicate MMU lane swaps across
+    // gantries because the slaved gantry's physical heads can't independently
+    // toolchange.
+    if (!pem.values.empty()) {
+        std::unordered_set<int> seen_physicals;
+        for (int filament : used_filaments_0b) {
+            if (filament < 0 || filament >= (int)pem.values.size()) continue;
+            const int phys = pem.get_at(filament);
+            if (!seen_physicals.insert(phys).second) {
+                return "Multi-color prints in IDEX/IQEX parallel modes require each filament "
+                       "to have its own dedicated physical extruder. Two or more of the active "
+                       "filaments are routed to the same physical head via the printer's "
+                       "physical extruder map (an MMU/AFC manifold), which the slaved gantry "
+                       "cannot follow.";
+            }
+        }
+    }
+
+    // Split modes are explicitly designed for per-gantry multi-color: each gantry
+    // gets half the bed and runs its own multi-tool sequence (the slaved gantry
+    // mirrors/copies the primary's sequence). The within-gantry-toolchange check
+    // below doesn't apply because Split's whole purpose is to enable that.
+    if (mode_type == kImexModeTypeSplit)
+        return {};
+
+    // Determine which physical head is the primary in this mode, then count how many
+    // tool roles are assigned to tools on the same gantry. Multi-color requires at
+    // least 2 (so there's a within-gantry toolchange topology).
+    const int primary_physical = imex_primary_tool_for_mode(active_tools_str);
+    if (primary_physical < 0) {
+        return "The active IDEX/IQEX mode does not define a primary tool, so multi-color "
+               "printing cannot be scheduled. Open the printer settings IDEX/IQEX Modes "
+               "editor and assign a Primary role to one tool.";
+    }
+    const int tpg = std::max(1, tools_per_gantry);
+    const int primary_gantry = primary_physical / tpg;
+    int tools_on_primary_gantry = 0;
+    for (const auto& [phys, role] : parse_imex_active_tools(active_tools_str)) {
+        if (phys / tpg == primary_gantry)
+            ++tools_on_primary_gantry;
+    }
+    if (tools_on_primary_gantry < 2) {
+        return "Multi-color prints in IDEX/IQEX parallel modes require at least two tools "
+               "assigned to the primary tool's gantry — there is no within-gantry "
+               "toolchange path otherwise. Either reduce the print to a single filament, "
+               "switch to Primary mode, or use a Split-type mode designed for per-gantry "
+               "multi-color printing.";
+    }
+    return {};
+}
+
 int first_filament_for_physical_head(const ConfigOptionInts& pem, int physical)
 {
     const auto& v = pem.values;

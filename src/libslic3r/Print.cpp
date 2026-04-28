@@ -1,5 +1,6 @@
 #include "Config.hpp"
 #include "Exception.hpp"
+#include "IMEXHelpers.hpp"
 #include "Print.hpp"
 #include "BoundingBox.hpp"
 #include "Brim.hpp"
@@ -1197,6 +1198,41 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
 
     if (extruders.empty())
         return { L("No extrusions under current settings.") };
+
+    // IDEX/IQEX: block multi-color in non-primary parallel modes when the active
+    // configuration can't physically support it (no within-gantry toolchange path
+    // or MMU lane sharing). See imex_multicolor_block_reason() for the full rule.
+    if (m_config.is_imex.value && extruders.size() > 1 && !m_objects.empty()) {
+        const std::string& parallel_mode = m_objects.front()->config().imex_parallel_mode.value;
+        if (!parallel_mode.empty() && parallel_mode != kImexPrimaryMode) {
+            // Look up the active mode's tools string in the printer config's parallel
+            // table. Fall back to empty (block helper handles it gracefully).
+            std::string active_tools_str;
+            const auto& mode_names = m_config.imex_mode_names.values;
+            const auto& mode_tools = m_config.imex_mode_active_tools.values;
+            for (size_t i = 0; i < mode_names.size(); ++i) {
+                if (mode_names[i] == parallel_mode && i < mode_tools.size()) {
+                    active_tools_str = mode_tools[i];
+                    break;
+                }
+            }
+            const std::string mode_type = imex_mode_type_for(
+                parallel_mode, mode_names, m_config.imex_mode_types.values);
+            std::vector<int> used_filaments_0b;
+            used_filaments_0b.reserve(extruders.size());
+            for (unsigned int e : extruders)
+                used_filaments_0b.push_back((int)e);
+            const std::string reason = imex_multicolor_block_reason(
+                parallel_mode,
+                mode_type,
+                active_tools_str,
+                m_config.imex_tools_per_gantry.value,
+                used_filaments_0b,
+                m_config.physical_extruder_map);
+            if (!reason.empty())
+                return { reason };
+        }
+    }
 
     if (nozzles < 2 && extruders.size() > 1) {
         auto ret = check_multi_filament_valid(*this);

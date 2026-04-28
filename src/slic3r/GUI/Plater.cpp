@@ -18069,7 +18069,8 @@ int Plater::select_plate_by_hover_id(int hover_id, bool right_click, bool isModi
                 for (size_t i = 0; i < modes.size(); ++i) {
                     int id = wxNewId();
                     mode_ids.push_back(id);
-                    wxMenuItem* item = menu.AppendRadioItem(id, from_u8(modes[i]));
+                    const wxString label = (modes[i] == kImexPrimaryMode) ? _L("Primary") : from_u8(modes[i]);
+                    wxMenuItem* item = menu.AppendRadioItem(id, label);
                     if (modes[i] == current)
                         item->Check(true);
                 }

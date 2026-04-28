@@ -131,6 +131,26 @@ enum class WallDirection
     Count,
 };
 
+// IMEX: physical bed corner where tool T0 sits. Determines how tool indices
+// map to bed zones (front = lower Y near operator, rear = higher Y).
+enum class ImexToolLayout {
+    FrontLeft,
+    FrontRight,
+    RearLeft,
+    RearRight,
+    Count,
+};
+
+// IMEX: color theme for the bed-zone visualization. Colorblind-friendly variants
+// are provided for users with color-vision differences.
+enum class ImexVizTheme {
+    Standard,
+    Deuteranopia,
+    Tritanopia,
+    HighContrast,
+    Count,
+};
+
 //BBS
 enum class PrintSequence {
     ByLayer,
@@ -1348,6 +1368,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionStrings,             imex_mode_names))
     ((ConfigOptionStrings,             imex_mode_active_tools))
     ((ConfigOptionStrings,             imex_mode_gcodes))
+    ((ConfigOptionStrings,             imex_mode_types))
     ((ConfigOptionBool,                single_extruder_multi_material_priming))
     ((ConfigOptionBool,                wipe_tower_no_sparse_layers))
     ((ConfigOptionString,              change_filament_gcode))

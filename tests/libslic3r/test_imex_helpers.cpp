@@ -83,6 +83,136 @@ TEST_CASE("imex_pem_tool_for — MMU collapse routes multiple logical slots to o
     REQUIRE(imex_pem_tool_for(6, "copy_mode", pem) == 3);
 }
 
+TEST_CASE("imex_suppresses_bare_toolchange — non-IMEX printer never suppresses", "[IMEX]") {
+    REQUIRE_FALSE(imex_suppresses_bare_toolchange("", 0));
+    REQUIRE_FALSE(imex_suppresses_bare_toolchange("", 1));
+    REQUIRE_FALSE(imex_suppresses_bare_toolchange("", 99));
+}
+
+TEST_CASE("imex_suppresses_bare_toolchange — Primary mode never suppresses (preserves AFC lane swap)", "[IMEX]") {
+    REQUIRE_FALSE(imex_suppresses_bare_toolchange("primary", 0));
+    REQUIRE_FALSE(imex_suppresses_bare_toolchange("primary", 1));
+    REQUIRE_FALSE(imex_suppresses_bare_toolchange("primary", 50));
+}
+
+TEST_CASE("imex_suppresses_bare_toolchange — parallel mode suppresses at print-start", "[IMEX]") {
+    // count == 0 in the single-extruder path (which never increments) and == 1 in
+    // the long multi-extruder path's first call after the increment both represent
+    // the print-start initial-tool select. Either should suppress so the user's
+    // mode_gcode-emitted T<n> isn't duplicated.
+    REQUIRE(imex_suppresses_bare_toolchange("copy_mode",   0));
+    REQUIRE(imex_suppresses_bare_toolchange("copy_mode",   1));
+    REQUIRE(imex_suppresses_bare_toolchange("mirror_mode", 0));
+    REQUIRE(imex_suppresses_bare_toolchange("iq-copy",     1));
+}
+
+TEST_CASE("imex_suppresses_bare_toolchange — parallel mode allows mid-print toolchange", "[IMEX]") {
+    // Mid-print toolchanges (count > 1) emit normally. Print::validate() blocks
+    // multi-color setups where mid-print T<n> wouldn't make sense; the only
+    // remaining case is IQEX with 2+ tools active on the primary gantry, where
+    // the firmware handles the slaved gantry automatically.
+    REQUIRE_FALSE(imex_suppresses_bare_toolchange("copy_mode",   2));
+    REQUIRE_FALSE(imex_suppresses_bare_toolchange("mirror_mode", 5));
+    REQUIRE_FALSE(imex_suppresses_bare_toolchange("backup_mode", 100));
+}
+
+TEST_CASE("imex_mode_type_for — primary sentinel always returns primary", "[IMEX]") {
+    REQUIRE(imex_mode_type_for("",        {}, {}) == "primary");
+    REQUIRE(imex_mode_type_for("primary", {}, {}) == "primary");
+}
+
+TEST_CASE("imex_mode_type_for — explicit type from parallel array", "[IMEX]") {
+    std::vector<std::string> names = {"primary", "my-copy", "my-split"};
+    std::vector<std::string> types = {"primary", "copy",    "split"  };
+    REQUIRE(imex_mode_type_for("my-copy",  names, types) == "copy");
+    REQUIRE(imex_mode_type_for("my-split", names, types) == "split");
+}
+
+TEST_CASE("imex_mode_type_for — legacy fallback when types vector missing", "[IMEX]") {
+    // Pre-imex_mode_types presets just had names. A mode literally named "copy" /
+    // "mirror" / "split" maps to itself; anything else defaults to primary.
+    std::vector<std::string> names = {"primary", "copy", "mirror", "split", "weird-name"};
+    std::vector<std::string> types; // empty → fallback to name-based inference
+    REQUIRE(imex_mode_type_for("copy",       names, types) == "copy");
+    REQUIRE(imex_mode_type_for("mirror",     names, types) == "mirror");
+    REQUIRE(imex_mode_type_for("split",      names, types) == "split");
+    REQUIRE(imex_mode_type_for("weird-name", names, types) == "primary");
+}
+
+TEST_CASE("imex_multicolor_block_reason — non-IMEX prints never block", "[IMEX]") {
+    auto pem = make_pem({0, 1, 2, 3});
+    REQUIRE(imex_multicolor_block_reason("",        "primary", "0:P,1:C", 2, {0, 1}, pem).empty());
+    REQUIRE(imex_multicolor_block_reason("primary", "primary", "0:P,1:C", 2, {0, 1}, pem).empty());
+}
+
+TEST_CASE("imex_multicolor_block_reason — single-color prints never block", "[IMEX]") {
+    auto pem = make_pem({0, 1, 2, 3});
+    REQUIRE(imex_multicolor_block_reason("copy",   "copy",   "0:P,1:C,2:M,3:M", 2, {0}, pem).empty());
+    REQUIRE(imex_multicolor_block_reason("mirror", "mirror", "0:P,1:C,2:M,3:M", 2, {},  pem).empty());
+}
+
+TEST_CASE("imex_multicolor_block_reason — IDEX (1 tool per gantry) blocks multi-color", "[IMEX]") {
+    // Two physical heads, each on its own gantry: tools_per_gantry=1, primary=T0
+    // on gantry 0, copy=T1 on gantry 1. Primary's gantry has only 1 active tool,
+    // so there's no within-gantry toolchange path. Block.
+    auto pem = make_pem({0, 1});
+    const std::string reason = imex_multicolor_block_reason("copy", "copy", "0:P,1:C", 1, {0, 1}, pem);
+    REQUIRE_FALSE(reason.empty());
+    REQUIRE_THAT(reason, Catch::Matchers::ContainsSubstring("primary tool's gantry"));
+}
+
+TEST_CASE("imex_multicolor_block_reason — IQEX 2-tool-active mode blocks multi-color", "[IMEX]") {
+    // 2x2 IQEX, mode has T0 primary + T2 copy (one tool per gantry, different
+    // gantries). Primary's gantry (gantry 0) has only T0 active → no within-gantry
+    // swap target. Block.
+    auto pem = make_pem({0, 1, 2, 3});
+    const std::string reason = imex_multicolor_block_reason("copy", "copy", "0:P,2:C", 2, {0, 2}, pem);
+    REQUIRE_FALSE(reason.empty());
+    REQUIRE_THAT(reason, Catch::Matchers::ContainsSubstring("primary tool's gantry"));
+}
+
+TEST_CASE("imex_multicolor_block_reason — IQEX 4-tool-active multi-color allowed", "[IMEX]") {
+    // 2x2 IQEX, all four tools active in the mode: T0 primary + T1 also on gantry 0,
+    // T2/T3 on gantry 1 mirroring. Primary's gantry has 2 tools active → within-
+    // gantry toolchange topology is present. Used filaments {0, 1} both on gantry 0.
+    auto pem = make_pem({0, 1, 2, 3});
+    REQUIRE(imex_multicolor_block_reason("copy", "copy", "0:P,1:C,2:M,3:M", 2, {0, 1}, pem).empty());
+}
+
+TEST_CASE("imex_multicolor_block_reason — Split mode allows multi-color regardless of gantry pair", "[IMEX]") {
+    // Split modes are explicitly designed for per-gantry multi-color, so the
+    // gantry-pair check is bypassed. T0+T2 with one tool per gantry would normally
+    // be blocked under copy/mirror semantics, but Split allows it.
+    auto pem = make_pem({0, 1, 2, 3});
+    REQUIRE(imex_multicolor_block_reason("split-copy", "split", "0:P,2:C", 2, {0, 2}, pem).empty());
+}
+
+TEST_CASE("imex_multicolor_block_reason — Split mode still blocks MMU sharing", "[IMEX]") {
+    // Even Split can't replicate an MMU lane swap on the slaved gantry — those
+    // physical heads aren't independently swappable.
+    auto pem = make_pem({0, 0, 0, 0, 1, 2, 3});
+    const std::string reason = imex_multicolor_block_reason("split-copy", "split", "0:P,2:C", 2, {0, 1}, pem);
+    REQUIRE_FALSE(reason.empty());
+    REQUIRE_THAT(reason, Catch::Matchers::ContainsSubstring("physical extruder map"));
+}
+
+TEST_CASE("imex_multicolor_block_reason — MMU lane sharing blocks multi-color", "[IMEX]") {
+    // pem maps both filament 0 and filament 1 to the same physical head 0 — that's
+    // an MMU/AFC manifold. IMEX parallel modes can't slave the secondary gantry
+    // through an MMU lane swap, so block.
+    auto pem = make_pem({0, 0, 0, 0, 1, 2, 3});
+    const std::string reason = imex_multicolor_block_reason("copy", "copy", "0:P,1:C,2:M,3:M", 2, {0, 1}, pem);
+    REQUIRE_FALSE(reason.empty());
+    REQUIRE_THAT(reason, Catch::Matchers::ContainsSubstring("physical extruder map"));
+}
+
+TEST_CASE("imex_multicolor_block_reason — mode without primary blocks", "[IMEX]") {
+    auto pem = make_pem({0, 1, 2, 3});
+    const std::string reason = imex_multicolor_block_reason("copy", "copy", "1:C,2:M", 2, {0, 1}, pem);
+    REQUIRE_FALSE(reason.empty());
+    REQUIRE_THAT(reason, Catch::Matchers::ContainsSubstring("primary tool"));
+}
+
 TEST_CASE("first_filament_for_physical_head — identity pem", "[IMEX]") {
     auto pem = make_pem({0, 1, 2, 3});
     REQUIRE(first_filament_for_physical_head(pem, 0) == 0);

@@ -580,16 +580,15 @@ void PartPlate::calc_imex_zones()
     // Grid dimensions and tool layout from printer config
     auto* gantry_opt  = printer_cfg.option<ConfigOptionInt>("imex_gantry_count");
     auto* tpg_opt     = printer_cfg.option<ConfigOptionInt>("imex_tools_per_gantry");
-    auto* layout_opt  = printer_cfg.option<ConfigOptionString>("imex_tool_layout");
+    auto* layout_opt  = printer_cfg.option<ConfigOptionEnum<ImexToolLayout>>("imex_tool_layout");
 
     int n_cols  = tpg_opt    ? std::max(1, tpg_opt->value)    : 2;
     int n_rows  = gantry_opt ? std::max(1, gantry_opt->value) : 1;
 
-    // Layout: which corner is T0? 0=front-left, 1=front-right, 2=rear-left, 3=rear-right
-    // flip_x: col 0 is right(max-X); flip_y: row 0 is rear(max-Y)
-    std::string layout_str = layout_opt ? layout_opt->value : "front-left";
-    bool flip_x = (layout_str == "front-right" || layout_str == "rear-right");
-    bool flip_y = (layout_str == "rear-left"   || layout_str == "rear-right");
+    // Which corner is T0? flip_x: col 0 is right(max-X); flip_y: row 0 is rear(max-Y)
+    const ImexToolLayout layout = layout_opt ? layout_opt->value : ImexToolLayout::FrontLeft;
+    bool flip_x = (layout == ImexToolLayout::FrontRight || layout == ImexToolLayout::RearRight);
+    bool flip_y = (layout == ImexToolLayout::RearLeft   || layout == ImexToolLayout::RearRight);
 
     // Convert tool index to physical (col=X-index, row=Y-index), col/row 0 = min-X/min-Y
     auto tool_to_phys = [&](int idx) -> std::pair<int,int> {
@@ -1221,16 +1220,47 @@ bool PartPlate::has_imex_placement_violations()
 
 bool PartPlate::has_imex_multimaterial_conflict() const
 {
-    // Condition 1: IMEX is active and the plate mode is non-primary
+    // Mirror the logic Print::validate uses so the plater badge fires exactly when
+    // slicing would be blocked — no false positives where the badge warns but the
+    // slice goes through anyway. Delegates to imex_multicolor_block_reason() so
+    // both paths share one source of truth.
     auto* pb = wxGetApp().preset_bundle;
     if (!pb) return false;
-    auto* is_imex_opt = pb->printers.get_edited_preset().config.option<ConfigOptionBool>("is_imex");
+    const DynamicPrintConfig& printer_cfg = pb->printers.get_edited_preset().config;
+    auto* is_imex_opt = printer_cfg.option<ConfigOptionBool>("is_imex");
     if (!is_imex_opt || !is_imex_opt->value) return false;
-    if (get_imex_mode() == kImexPrimaryMode) return false;
 
-    // Condition 2: objects on this plate actually use more than one unique filament/extruder
-    std::vector<int> used = get_extruders(true);
-    return used.size() > 1;
+    const std::string mode = get_imex_mode();
+    if (mode == kImexPrimaryMode) return false;
+
+    // Resolve the active mode's tools string from the printer config.
+    auto* names_opt = printer_cfg.option<ConfigOptionStrings>("imex_mode_names");
+    auto* tools_opt = printer_cfg.option<ConfigOptionStrings>("imex_mode_active_tools");
+    auto* types_opt = printer_cfg.option<ConfigOptionStrings>("imex_mode_types");
+    auto* tpg_opt   = printer_cfg.option<ConfigOptionInt>("imex_tools_per_gantry");
+    auto* pem_opt   = printer_cfg.option<ConfigOptionInts>("physical_extruder_map");
+    if (!names_opt || !tools_opt || !tpg_opt || !pem_opt) return false;
+
+    std::string active_tools_str;
+    for (size_t i = 0; i < names_opt->values.size(); ++i) {
+        if (names_opt->values[i] == mode && i < tools_opt->values.size()) {
+            active_tools_str = tools_opt->values[i];
+            break;
+        }
+    }
+
+    const std::vector<std::string> empty_types;
+    const std::string mode_type = imex_mode_type_for(
+        mode, names_opt->values,
+        types_opt ? types_opt->values : empty_types);
+
+    // Convert PartPlate's 1-based extruder list to the 0-based form the helper expects.
+    const std::vector<int> used_1b = get_extruders(true);
+    std::vector<int> used_0b;
+    used_0b.reserve(used_1b.size());
+    for (int e : used_1b) if (e > 0) used_0b.push_back(e - 1);
+
+    return !imex_multicolor_block_reason(mode, mode_type, active_tools_str, tpg_opt->value, used_0b, *pem_opt).empty();
 }
 
 void PartPlate::render_imex_zones(bool force_default_color)
@@ -1283,10 +1313,13 @@ void PartPlate::render_imex_zones(bool force_default_color)
     const IMEXTheme* theme = &k_standard;
     if (wxGetApp().preset_bundle) {
         const DynamicPrintConfig& pcfg = wxGetApp().preset_bundle->printers.get_edited_preset().config;
-        if (auto* t = pcfg.option<ConfigOptionString>("imex_viz_theme")) {
-            if      (t->value == "deuteranopia")  theme = &k_deuteranopia;
-            else if (t->value == "tritanopia")    theme = &k_tritanopia;
-            else if (t->value == "high_contrast") theme = &k_high_contrast;
+        if (auto* t = pcfg.option<ConfigOptionEnum<ImexVizTheme>>("imex_viz_theme")) {
+            switch (t->value) {
+            case ImexVizTheme::Deuteranopia: theme = &k_deuteranopia;  break;
+            case ImexVizTheme::Tritanopia:   theme = &k_tritanopia;    break;
+            case ImexVizTheme::HighContrast: theme = &k_high_contrast; break;
+            default: break; // Standard
+            }
         }
     }
 
@@ -2092,6 +2125,7 @@ void PartPlate::render_icons(bool bottom, bool only_name, int hover_id)
                     if (hover_id == (int)PLATE_IMEX_MODE_ID) {
                         render_icon_texture(m_imex_mode_icon.model, m_partplate_list->m_imex_mode_hovered_texture);
                         std::string cur = get_imex_mode();
+                        if (cur == kImexPrimaryMode) cur = _u8L("Primary");
                         show_tooltip(_u8L("IDEX/IQEX mode: ") + cur + _u8L(" (left-click to cycle, right-click for menu)"));
                     } else {
                         render_icon_texture(m_imex_mode_icon.model, m_partplate_list->m_imex_mode_texture);

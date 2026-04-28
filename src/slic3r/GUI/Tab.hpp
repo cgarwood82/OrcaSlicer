@@ -606,8 +606,6 @@ private:
 
     wxBoxSizer*         m_presets_sizer                 {nullptr};
     IMEXModesCtrl*      m_imex_modes_ctrl               {nullptr};
-    ComboBox*           m_imex_layout_combo             {nullptr};
-    ComboBox*           m_imex_theme_combo              {nullptr};
 public:
 	ScalableButton*	m_reset_to_filament_color = nullptr;
 

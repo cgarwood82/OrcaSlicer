@@ -7676,7 +7676,15 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
             m_pa_processor->resetPreviousPA(m_config.pressure_advance.get_at(new_filament_id));
         }
 
-        gcode += m_writer.toolchange(new_filament_id);
+        // Same suppression as the long multi-extruder path: at print-start in IMEX
+        // parallel modes the user's mode_gcode + machine_start_gcode is responsible
+        // for tool selection, so the slicer's bare T<n> would be a duplicate. Mid-
+        // print toolchanges (count > 1) emit normally — Print::validate() blocks
+        // multi-color in configurations where mid-print T<n> wouldn't make sense
+        // (see imex_multicolor_block_reason).
+        const std::string toolchange_command = m_writer.toolchange(new_filament_id);
+        if (!imex_suppresses_bare_toolchange(m_imex_parallel_mode, m_toolchange_count))
+            gcode += toolchange_command;
         return gcode;
     }
 
@@ -7913,7 +7921,13 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
     //BBS: don't add T[next extruder] if there is no T cmd on filament change
      //We inform the writer about what is happening, but we may not use the resulting gcode.
     std::string toolchange_command = m_writer.toolchange(new_filament_id);
-    if (!custom_gcode_changes_tool(toolchange_gcode_parsed, m_writer.toolchange_prefix(), new_filament_id))
+    // See imex_suppresses_bare_toolchange() — only suppress the print-start initial
+    // T<n> in parallel modes (the user's imex_mode_gcode + machine_start_gcode owns
+    // tool activation there). Mid-print T<n> emits normally; Print::validate blocks
+    // multi-color setups where it wouldn't make sense.
+    const bool suppress_imex_bare = imex_suppresses_bare_toolchange(m_imex_parallel_mode, m_toolchange_count);
+    if (!custom_gcode_changes_tool(toolchange_gcode_parsed, m_writer.toolchange_prefix(), new_filament_id)
+        && !suppress_imex_bare)
         gcode += toolchange_command;
     else {
         // user provided his own toolchange gcode, no need to do anything

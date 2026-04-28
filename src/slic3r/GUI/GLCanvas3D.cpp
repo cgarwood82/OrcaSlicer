@@ -7405,18 +7405,20 @@ void GLCanvas3D::_render_imex_ghost_tooltip()
 
     ImGuiWrapper& imgui = *wxGetApp().imgui();
     const Vec2i32 mouse = m_mouse.position.cast<int>();
-    imgui.set_next_window_pos(float(mouse.x() + 16), float(mouse.y() + 16),
+    const float cursor_offset = imgui.scaled(1.6f); // ~16px @ 100%, scales with DPI
+    imgui.set_next_window_pos(float(mouse.x()) + cursor_offset, float(mouse.y()) + cursor_offset,
                               ImGuiCond_Always, 0.0f, 0.0f);
     imgui.begin(std::string("##imex_ghost_tooltip"),
                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
                 ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings |
                 ImGuiWindowFlags_NoMouseInputs);
-    // 14px color swatch + label on the same row.
+    // Color swatch + label on the same row. imgui.scaled() keeps it readable on high-DPI.
     const ImVec4 col(t.swatch.r(), t.swatch.g(), t.swatch.b(), t.swatch.a());
+    const float swatch_size = imgui.scaled(1.4f);
     ImGui::ColorButton("##swatch", col,
         ImGuiColorEditFlags_NoBorder | ImGuiColorEditFlags_NoTooltip,
-        ImVec2(14, 14));
+        ImVec2(swatch_size, swatch_size));
     ImGui::SameLine();
     imgui.text(t.label);
     imgui.end();

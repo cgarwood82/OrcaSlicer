@@ -1044,7 +1044,7 @@ static std::vector<std::string> s_Preset_printer_options {
     // IDEX/IQEX (independent X extruder) — printer capability and user-defined modes
     "is_imex", "imex_gantry_count", "imex_tools_per_gantry", "imex_tool_layout",
     "imex_nozzle_clearance_x", "imex_nozzle_clearance_y", "imex_carriage_margin", "imex_viz_theme",
-    "imex_mode_names", "imex_mode_active_tools", "imex_mode_gcodes"
+    "imex_mode_names", "imex_mode_active_tools", "imex_mode_gcodes", "imex_mode_types"
     };
 
 static std::vector<std::string> s_Preset_sla_print_options {
