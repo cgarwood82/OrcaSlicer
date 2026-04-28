@@ -605,6 +605,7 @@ void PartPlate::calc_imex_zones()
     // Look up secondary tool indices (active in mode, but NOT the primary tool)
     auto* names_opt  = printer_cfg.option<ConfigOptionStrings>("imex_mode_names");
     auto* tools_opt  = printer_cfg.option<ConfigOptionStrings>("imex_mode_active_tools");
+    auto* types_opt  = printer_cfg.option<ConfigOptionStrings>("imex_mode_types");
     std::string active_tools_str;
     if (names_opt && tools_opt) {
         for (size_t i = 0; i < names_opt->values.size(); ++i) {
@@ -614,6 +615,14 @@ void PartPlate::calc_imex_zones()
             }
         }
     }
+    // Mode topology tag — Split modes aggregate per-gantry (one zone covering the
+    // full gantry rail) rather than per-tool. Falls through to "primary"/"copy"/
+    // "mirror" inference when imex_mode_types is empty (legacy presets).
+    const std::vector<std::string> empty_types;
+    const std::string mode_type = imex_mode_type_for(
+        active_mode,
+        names_opt ? names_opt->values : empty_types,
+        types_opt ? types_opt->values : empty_types);
 
     // Parse "phys_idx:P/C/M" format → map<phys_idx, state>  (1=Primary, 2=Copy, 3=Mirror).
     // imex_primary_tool_for_mode handles the Primary slot (bare legacy token → Primary);
@@ -707,6 +716,26 @@ void PartPlate::calc_imex_zones()
     for (const auto& [sc, sr] : all_secondary) {
         if (sr != pri_row) has_row_sep = true;
         if (sc != pri_col) has_col_sep = true;
+    }
+
+    // Split-mode aggregation: each non-primary gantry renders as ONE zone covering
+    // its full Y band rather than per-tool quadrants. Achieved by collapsing the
+    // copy/mirror cell sets so all entries share primary's column (suppresses
+    // col-sep), then forcing has_col_sep = false so make_boxes takes its
+    // full-X-row branch. The role color (copy vs mirror) is preserved per gantry.
+    if (mode_type == kImexModeTypeSplit && has_row_sep) {
+        auto aggregate_per_gantry = [&](std::set<std::pair<int,int>>& cells) {
+            std::set<int> rows;
+            for (const auto& [c, r] : cells) rows.insert(r);
+            cells.clear();
+            for (int r : rows) cells.insert({pri_col, r});
+        };
+        aggregate_per_gantry(copy_cells);
+        aggregate_per_gantry(mirror_cells);
+        all_secondary.clear();
+        for (const auto& p : copy_cells)   all_secondary.insert(p);
+        for (const auto& p : mirror_cells) all_secondary.insert(p);
+        has_col_sep = false;
     }
 
     // Primary zone extent (the clear printable area):
@@ -1056,6 +1085,34 @@ void PartPlate::calc_imex_ghosts()
 
     const auto heads = parse_imex_active_tools(active_tools_str);
 
+    // Split-mode aggregation: collapse the per-tool ghost emission down to one ghost
+    // per non-primary gantry. The "canonical" head for a gantry is the tool whose
+    // physical column matches primary's (the spatial Y-mirror partner); falls back
+    // to the first head encountered on that gantry if no col-match exists.
+    const DynamicPrintConfig& gh_printer_cfg = wxGetApp().preset_bundle->printers.get_edited_preset().config;
+    auto* gh_names_opt = gh_printer_cfg.option<ConfigOptionStrings>("imex_mode_names");
+    auto* gh_types_opt = gh_printer_cfg.option<ConfigOptionStrings>("imex_mode_types");
+    auto* gh_tpg_opt   = gh_printer_cfg.option<ConfigOptionInt>("imex_tools_per_gantry");
+    const std::vector<std::string> gh_empty_strings;
+    const std::string gh_mode_type = imex_mode_type_for(
+        get_imex_mode(),
+        gh_names_opt ? gh_names_opt->values : gh_empty_strings,
+        gh_types_opt ? gh_types_opt->values : gh_empty_strings);
+    const int gh_tpg = gh_tpg_opt ? std::max(1, gh_tpg_opt->value) : 1;
+    const int gh_primary_col = primary_phys % gh_tpg;
+    std::map<int, int> canonical_head_per_gantry; // gantry idx → physical head we emit
+    if (gh_mode_type == kImexModeTypeSplit) {
+        for (const auto& [phys, role] : heads) {
+            if (phys == primary_phys) continue;
+            if (phys >= IMEX_GHOST_MAX_HEADS) continue;
+            const int gantry = phys / gh_tpg;
+            const int col    = phys % gh_tpg;
+            auto it = canonical_head_per_gantry.find(gantry);
+            if (it == canonical_head_per_gantry.end() || col == gh_primary_col)
+                canonical_head_per_gantry[gantry] = phys;
+        }
+    }
+
     // Zone centers are the source of truth for ghost placement: they come from the
     // same grid math that paints the colored secondary zones, so a ghost always lands
     // in its own tool's zone. extruder_offset is physical-nozzle data and is left at
@@ -1101,6 +1158,13 @@ void PartPlate::calc_imex_ghosts()
         for (const auto& [phys, role] : heads) {
             if (phys == primary_phys) continue;
             if (phys >= IMEX_GHOST_MAX_HEADS) continue;
+            // Split mode: skip non-canonical tools on a gantry — only the gantry's
+            // representative tool (col-paired with primary, fallback first-seen)
+            // emits a ghost so the user sees one aggregate per non-primary gantry.
+            if (gh_mode_type == kImexModeTypeSplit) {
+                auto it = canonical_head_per_gantry.find(phys / gh_tpg);
+                if (it == canonical_head_per_gantry.end() || it->second != phys) continue;
+            }
 
             const Vec2d gantry = center_for(phys) - primary_off;
             // Mirror reflects about the zone-boundary plane through the primary zone
