@@ -48,30 +48,7 @@ bool imex_suppresses_bare_toolchange(const std::string& parallel_mode, unsigned 
         && parallel_mode != kImexPrimaryMode;
 }
 
-std::string imex_mode_type_for(const std::string& mode_name,
-                               const std::vector<std::string>& mode_names,
-                               const std::vector<std::string>& mode_types)
-{
-    if (mode_name.empty() || mode_name == kImexPrimaryMode)
-        return kImexModeTypePrimary;
-    // Look up the parallel-vector entry by index match.
-    for (size_t i = 0; i < mode_names.size(); ++i) {
-        if (mode_names[i] != mode_name) continue;
-        if (i < mode_types.size() && !mode_types[i].empty())
-            return mode_types[i];
-        break; // entry found but no type set → fall through to inference
-    }
-    // Legacy fallback: a mode literally named "copy" / "mirror" / "split" was authored
-    // before imex_mode_types existed. Take the name as the type.
-    if (mode_name == kImexModeTypeCopy ||
-        mode_name == kImexModeTypeMirror ||
-        mode_name == kImexModeTypeSplit)
-        return mode_name;
-    return kImexModeTypePrimary;
-}
-
 std::string imex_multicolor_block_reason(const std::string& parallel_mode,
-                                         const std::string& mode_type,
                                          const std::string& active_tools_str,
                                          int tools_per_gantry,
                                          const std::vector<int>& used_filaments_0b,
@@ -84,10 +61,7 @@ std::string imex_multicolor_block_reason(const std::string& parallel_mode,
 
     // MMU lane sharing detection: two or more used filaments routed to the same
     // physical head means a mid-print MMU swap on that head, which IMEX parallel
-    // modes can't slave to the secondary gantry. Applies to all parallel mode
-    // types including Split — even Split can't replicate MMU lane swaps across
-    // gantries because the slaved gantry's physical heads can't independently
-    // toolchange.
+    // modes can't slave to the secondary gantry.
     if (!pem.values.empty()) {
         std::unordered_set<int> seen_physicals;
         for (int filament : used_filaments_0b) {
@@ -102,13 +76,6 @@ std::string imex_multicolor_block_reason(const std::string& parallel_mode,
             }
         }
     }
-
-    // Split modes are explicitly designed for per-gantry multi-color: each gantry
-    // gets half the bed and runs its own multi-tool sequence (the slaved gantry
-    // mirrors/copies the primary's sequence). The within-gantry-toolchange check
-    // below doesn't apply because Split's whole purpose is to enable that.
-    if (mode_type == kImexModeTypeSplit)
-        return {};
 
     // Determine which physical head is the primary in this mode, then count how many
     // tool roles are assigned to tools on the same gantry. Multi-color requires at
@@ -130,8 +97,8 @@ std::string imex_multicolor_block_reason(const std::string& parallel_mode,
         return "Multi-color prints in IDEX/IQEX parallel modes require at least two tools "
                "assigned to the primary tool's gantry — there is no within-gantry "
                "toolchange path otherwise. Either reduce the print to a single filament, "
-               "switch to Primary mode, or use a Split-type mode designed for per-gantry "
-               "multi-color printing.";
+               "switch to Primary mode, or define a parallel mode that pairs two tools on "
+               "the primary gantry.";
     }
     return {};
 }

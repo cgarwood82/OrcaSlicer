@@ -1236,7 +1236,6 @@ bool PartPlate::has_imex_multimaterial_conflict() const
     // Resolve the active mode's tools string from the printer config.
     auto* names_opt = printer_cfg.option<ConfigOptionStrings>("imex_mode_names");
     auto* tools_opt = printer_cfg.option<ConfigOptionStrings>("imex_mode_active_tools");
-    auto* types_opt = printer_cfg.option<ConfigOptionStrings>("imex_mode_types");
     auto* tpg_opt   = printer_cfg.option<ConfigOptionInt>("imex_tools_per_gantry");
     auto* pem_opt   = printer_cfg.option<ConfigOptionInts>("physical_extruder_map");
     if (!names_opt || !tools_opt || !tpg_opt || !pem_opt) return false;
@@ -1249,18 +1248,13 @@ bool PartPlate::has_imex_multimaterial_conflict() const
         }
     }
 
-    const std::vector<std::string> empty_types;
-    const std::string mode_type = imex_mode_type_for(
-        mode, names_opt->values,
-        types_opt ? types_opt->values : empty_types);
-
     // Convert PartPlate's 1-based extruder list to the 0-based form the helper expects.
     const std::vector<int> used_1b = get_extruders(true);
     std::vector<int> used_0b;
     used_0b.reserve(used_1b.size());
     for (int e : used_1b) if (e > 0) used_0b.push_back(e - 1);
 
-    return !imex_multicolor_block_reason(mode, mode_type, active_tools_str, tpg_opt->value, used_0b, *pem_opt).empty();
+    return !imex_multicolor_block_reason(mode, active_tools_str, tpg_opt->value, used_0b, *pem_opt).empty();
 }
 
 void PartPlate::render_imex_zones(bool force_default_color)

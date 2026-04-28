@@ -105,25 +105,6 @@ int imex_pem_tool_for(int filament_id, const std::string& parallel_mode, const C
 // contains its own T<n> is handled separately by GCode.cpp's custom_gcode_changes_tool().
 bool imex_suppresses_bare_toolchange(const std::string& parallel_mode, unsigned int toolchange_count);
 
-// Mode-type sentinels used by imex_mode_types entries and returned by
-// imex_mode_type_for(). Compared against to drive zone/ghost/validation behavior.
-inline constexpr const char* kImexModeTypePrimary = "primary";
-inline constexpr const char* kImexModeTypeCopy    = "copy";
-inline constexpr const char* kImexModeTypeMirror  = "mirror";
-inline constexpr const char* kImexModeTypeSplit   = "split";
-
-// Looks up the topology type ("primary" / "copy" / "mirror" / "split") for the named
-// mode. Reads from the parallel imex_mode_types vector when present; falls back to
-// inferring from the mode_name itself when the entry is missing or empty (legacy
-// presets pre-dating imex_mode_types — a mode literally named "copy" is treated as
-// a copy-type mode, etc.). Anything unknown defaults to "primary".
-//
-// `mode_name` should be the active mode being looked up. `mode_names` and `mode_types`
-// are the parallel vectors from the printer config.
-std::string imex_mode_type_for(const std::string& mode_name,
-                               const std::vector<std::string>& mode_names,
-                               const std::vector<std::string>& mode_types);
-
 // Returns a user-facing block reason when multi-color printing is incompatible with
 // the active IMEX parallel mode, or an empty string when the configuration is OK.
 //
@@ -147,16 +128,12 @@ std::string imex_mode_type_for(const std::string& mode_name,
 //
 // Inputs:
 //   parallel_mode      — m_imex_parallel_mode at slice time
-//   mode_type          — imex_mode_type_for(parallel_mode, ...). "split" types skip the
-//                        gantry-pair check (Split modes are explicitly designed for
-//                        per-gantry multi-color); MMU sharing still blocks them.
 //   active_tools_str   — the imex_mode_active_tools entry for the active mode, e.g.
 //                        "0:P,1:C,2:M,3:M"
 //   tools_per_gantry   — imex_tools_per_gantry from printer config (>= 1)
 //   used_filaments_0b  — 0-based logical filament indices used by the print
 //   pem                — physical_extruder_map (logical idx → physical head)
 std::string imex_multicolor_block_reason(const std::string& parallel_mode,
-                                         const std::string& mode_type,
                                          const std::string& active_tools_str,
                                          int tools_per_gantry,
                                          const std::vector<int>& used_filaments_0b,

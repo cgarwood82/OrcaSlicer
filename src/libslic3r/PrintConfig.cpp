@@ -5667,20 +5667,6 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionStrings());
 
-    // Mode-type tag drives how zones, ghosts, and slice-time validation interpret a
-    // given mode entry. Parallel to imex_mode_names. Values: "primary", "copy",
-    // "mirror", "split". Empty / missing entries fall back to "primary" except for
-    // entries named "copy" or "mirror" (legacy compat with pre-type configs).
-    def = this->add("imex_mode_types", coStrings);
-    def->label = L("IDEX/IQEX Mode Types");
-    def->tooltip = L("Per-mode topology tag. \"copy\" / \"mirror\" produce one ghost per "
-                     "non-primary tool at the corresponding mirrored/copied position. "
-                     "\"split\" splits the bed in half along the gantry axis and aggregates "
-                     "each gantry's tools into a single multi-color print region — used "
-                     "for paired-gantry IQEX multi-color printing.");
-    def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionStrings());
-
     def = this->add("manual_filament_change", coBool);
     def->label = L("Manual Filament Change");
     def->tooltip = L("Enable this option to omit the custom Change filament G-code only at the beginning of the print. "

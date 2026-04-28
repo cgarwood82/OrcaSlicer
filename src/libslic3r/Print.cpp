@@ -1216,15 +1216,12 @@ StringObjectException Print::validate(StringObjectException *warning, Polygons* 
                     break;
                 }
             }
-            const std::string mode_type = imex_mode_type_for(
-                parallel_mode, mode_names, m_config.imex_mode_types.values);
             std::vector<int> used_filaments_0b;
             used_filaments_0b.reserve(extruders.size());
             for (unsigned int e : extruders)
                 used_filaments_0b.push_back((int)e);
             const std::string reason = imex_multicolor_block_reason(
                 parallel_mode,
-                mode_type,
                 active_tools_str,
                 m_config.imex_tools_per_gantry.value,
                 used_filaments_0b,
