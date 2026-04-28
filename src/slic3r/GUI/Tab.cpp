@@ -4457,22 +4457,17 @@ public:
         info_panel->SetSizer(info_sizer);
 
         // Column header row — spacers sized to align with the mode-row fields below.
-        // Name field: FromDIP(130) + FromDIP(6) gap; type col: FromDIP(80) + FromDIP(6) gap;
-        // tool grid: n_cols*(FromDIP(36)+FromDIP(2))-FromDIP(2) + FromDIP(6) gap.
+        // Name field: FromDIP(130) + FromDIP(6) gap; tool grid: n_cols*(FromDIP(36)+FromDIP(2))-FromDIP(2) + FromDIP(6) gap.
         auto* hdr_panel = new wxPanel(this, wxID_ANY);
         hdr_panel->SetBackgroundColour(GetBackgroundColour());
         auto* hdr_sizer = new wxBoxSizer(wxHORIZONTAL);
         auto* hdr_name  = new wxStaticText(hdr_panel, wxID_ANY, _L("Name"));
-        auto* hdr_type  = new wxStaticText(hdr_panel, wxID_ANY, _L("Type"));
         auto* hdr_tools = new wxStaticText(hdr_panel, wxID_ANY, _L("Tools"));
         auto* hdr_gcode = new wxStaticText(hdr_panel, wxID_ANY, _L("G-code"));
         const int grid_px = m_n_cols * FromDIP(38) - FromDIP(2);  // approx grid panel width
         const int name_col_px = FromDIP(136);
-        const int type_col_px = FromDIP(86);
         hdr_sizer->Add(hdr_name,  0, wxALIGN_CENTER_VERTICAL);
         hdr_sizer->AddSpacer(std::max(0, name_col_px - hdr_name->GetBestSize().x));
-        hdr_sizer->Add(hdr_type,  0, wxALIGN_CENTER_VERTICAL);
-        hdr_sizer->AddSpacer(std::max(0, type_col_px - hdr_type->GetBestSize().x));
         hdr_sizer->Add(hdr_tools, 0, wxALIGN_CENTER_VERTICAL);
         hdr_sizer->AddSpacer(std::max(0, grid_px + FromDIP(6) - hdr_tools->GetBestSize().x));
         hdr_sizer->Add(hdr_gcode, 1, wxALIGN_CENTER_VERTICAL);
@@ -4495,15 +4490,13 @@ public:
         n_rows = std::max(1, n_rows);
         if (layout < 0) layout = m_layout;
         if (n_cols == m_n_cols && n_rows == m_n_rows && layout == m_layout) return;
-        auto [names, tools, gcodes, types] = get_mode_data();
+        auto [names, tools, gcodes] = get_mode_data();
         clear_rows();
         m_n_cols = n_cols;
         m_n_rows = n_rows;
         m_layout = layout;
-        for (size_t i = 0; i < names.size(); ++i) {
-            const std::string t = (i < types.size() && !types[i].empty()) ? types[i] : kImexModeTypeCopy;
-            add_row(names[i], tools[i], gcodes[i], t, /*is_primary=*/(names[i] == kImexPrimaryMode));
-        }
+        for (size_t i = 0; i < names.size(); ++i)
+            add_row(names[i], tools[i], gcodes[i], /*is_primary=*/(names[i] == kImexPrimaryMode));
         Layout();
     }
 
@@ -4512,17 +4505,6 @@ public:
         auto* names  = cfg.option<ConfigOptionStrings>("imex_mode_names");
         auto* tools  = cfg.option<ConfigOptionStrings>("imex_mode_active_tools");
         auto* gcodes = cfg.option<ConfigOptionStrings>("imex_mode_gcodes");
-        auto* types  = cfg.option<ConfigOptionStrings>("imex_mode_types");
-
-        // Resolve a row's type using imex_mode_type_for so legacy presets without
-        // imex_mode_types still infer copy/mirror/split from their mode name.
-        const std::vector<std::string> empty_strings;
-        auto resolve_type = [&](const std::string& mode_name) -> std::string {
-            return imex_mode_type_for(
-                mode_name,
-                names ? names->values : empty_strings,
-                types ? types->values : empty_strings);
-        };
 
         // Primary row is always first and non-deletable.  Look for an existing
         // "primary" entry in the config (present in configs saved after #8 was
@@ -4539,48 +4521,39 @@ public:
                 }
             }
         }
-        add_row(kImexPrimaryMode, primary_tools, primary_gcode, kImexModeTypePrimary, /*is_primary=*/true);
+        add_row(kImexPrimaryMode, primary_tools, primary_gcode, /*is_primary=*/true);
 
         size_t n = names ? names->values.size() : 0;
         for (size_t i = 0; i < n; ++i) {
             if (i == primary_cfg_idx) continue; // already added above
             add_row(names->values[i],
                     (tools  && i < tools->values.size())  ? tools->values[i]  : "",
-                    (gcodes && i < gcodes->values.size()) ? gcodes->values[i] : "",
-                    resolve_type(names->values[i]));
+                    (gcodes && i < gcodes->values.size()) ? gcodes->values[i] : "");
         }
         refresh_reset_buttons();
         Layout();
     }
 
-    std::tuple<std::vector<std::string>, std::vector<std::string>, std::vector<std::string>, std::vector<std::string>>
+    std::tuple<std::vector<std::string>, std::vector<std::string>, std::vector<std::string>>
     get_mode_data() const {
-        std::vector<std::string> names, tools, gcodes, types;
+        std::vector<std::string> names, tools, gcodes;
         for (auto& r : m_rows) {
             std::string nm = r.is_primary ? std::string(kImexPrimaryMode) : r.name->GetValue().ToStdString();
             if (nm.empty()) continue;
             names.push_back(nm);
             tools.push_back(active_tools_string(r));
             gcodes.push_back(r.gcode->GetValue().ToStdString());
-            // Primary row's type is sentinel-fixed; non-primary rows read from the dropdown.
-            if (r.is_primary || !r.type_choice) {
-                types.push_back(kImexModeTypePrimary);
-            } else {
-                const int idx = r.type_choice->GetSelection();
-                const auto& choices = type_choices();
-                types.push_back((idx >= 0 && idx < (int)choices.size()) ? choices[idx].second : kImexModeTypeCopy);
-            }
         }
-        return {names, tools, gcodes, types};
+        return {names, tools, gcodes};
     }
 
-    // True when the widget's current rows already mirror the four IMEX-mode option
+    // True when the widget's current rows already mirror the three IMEX-mode option
     // vectors in cfg. Used by TabPrinter::update_fff() to skip a destroy-and-rebuild
     // pass when the only thing that just changed was the widget itself writing back
     // to config — without this guard, every keystroke in the gcode textbox triggers
     // a load_from_config() that detaches the textbox the user is typing in.
     bool matches_config(const DynamicPrintConfig& cfg) const {
-        auto [names, tools, gcodes, types] = get_mode_data();
+        auto [names, tools, gcodes] = get_mode_data();
         auto cfg_strings = [&cfg](const char* key) {
             std::vector<std::string> v;
             if (auto* o = cfg.option<ConfigOptionStrings>(key)) v = o->values;
@@ -4588,8 +4561,7 @@ public:
         };
         return names  == cfg_strings("imex_mode_names")
             && tools  == cfg_strings("imex_mode_active_tools")
-            && gcodes == cfg_strings("imex_mode_gcodes")
-            && types  == cfg_strings("imex_mode_types");
+            && gcodes == cfg_strings("imex_mode_gcodes");
     }
 
     // Parse "idx:P,idx:C,idx:M" → map<tool_idx, state>
@@ -4649,7 +4621,6 @@ private:
         wxPanel*             panel;
         wxTextCtrl*          name;       // nullptr for primary row (name is fixed)
         wxTextCtrl*          gcode;
-        wxChoice*            type_choice {nullptr}; // nullptr for primary row (type is fixed)
         std::vector<wxButton*> btns;
         std::vector<int>     btn_states;
         std::vector<int>     btn_tool_idx;
@@ -4659,37 +4630,13 @@ private:
         bool                 reset_dirty_cached {false};
     };
 
-    // Type-column dropdown indices match this static array. Wire-format strings
-    // (kImexModeType*) are what get written to imex_mode_types serialization.
-    static const std::vector<std::pair<wxString, std::string>>& type_choices() {
-        static const std::vector<std::pair<wxString, std::string>> v = {
-            { _L("Copy"),   kImexModeTypeCopy   },
-            { _L("Mirror"), kImexModeTypeMirror },
-            { _L("Split"),  kImexModeTypeSplit  },
-        };
-        return v;
-    }
-    static int type_choice_index(const std::string& type) {
-        const auto& choices = type_choices();
-        for (size_t i = 0; i < choices.size(); ++i)
-            if (choices[i].second == type) return (int)i;
-        return 0; // default to Copy
-    }
-
     // Snapshot of row content as it would be saved (matches get_mode_data() per-row).
-    struct RowSnapshot { std::string name, tools, gcode, type; };
+    struct RowSnapshot { std::string name, tools, gcode; };
     RowSnapshot snapshot_row(const Row& r) const {
         RowSnapshot s;
         s.name  = r.is_primary ? std::string(kImexPrimaryMode) : r.name->GetValue().ToStdString();
         s.tools = active_tools_string(r);
         s.gcode = r.gcode->GetValue().ToStdString();
-        if (r.is_primary || !r.type_choice) {
-            s.type = kImexModeTypePrimary;
-        } else {
-            const int idx = r.type_choice->GetSelection();
-            const auto& choices = type_choices();
-            s.type = (idx >= 0 && idx < (int)choices.size()) ? choices[idx].second : kImexModeTypeCopy;
-        }
         return s;
     }
 
@@ -4705,14 +4652,12 @@ private:
         auto* p_names  = parent->option<ConfigOptionStrings>("imex_mode_names");
         auto* p_tools  = parent->option<ConfigOptionStrings>("imex_mode_active_tools");
         auto* p_gcodes = parent->option<ConfigOptionStrings>("imex_mode_gcodes");
-        auto* p_types  = parent->option<ConfigOptionStrings>("imex_mode_types");
         if (!p_names || row_idx < 0 || row_idx >= (int)p_names->values.size()) return false;
         const Row& r = m_rows[row_idx];
         const RowSnapshot s = snapshot_row(r);
         if (!r.is_primary && s.name != p_names->values[row_idx]) return true;
         if (p_tools  && row_idx < (int)p_tools->values.size()  && s.tools  != p_tools->values[row_idx])  return true;
         if (p_gcodes && row_idx < (int)p_gcodes->values.size() && s.gcode != p_gcodes->values[row_idx]) return true;
-        if (!r.is_primary && p_types && row_idx < (int)p_types->values.size() && s.type != p_types->values[row_idx]) return true;
         return false;
     }
 
@@ -4729,7 +4674,6 @@ private:
     void add_row(const std::string& name = "",
                  const std::string& active_tools = "",
                  const std::string& gcode = "",
-                 const std::string& type = kImexModeTypeCopy,
                  bool is_primary = false)
     {
         Row r;
@@ -4746,26 +4690,9 @@ private:
             f.SetWeight(wxFONTWEIGHT_BOLD);
             lbl->SetFont(f);
             sizer->Add(lbl, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
-            // Primary row gets a static "Primary" type label in the type column
-            // (the type is sentinel-fixed; no choice to offer).
-            auto* type_lbl = new wxStaticText(r.panel, wxID_ANY, _L("Primary"),
-                                              wxDefaultPosition, FromDIP(wxSize(80, -1)));
-            sizer->Add(type_lbl, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
         } else {
             r.name = new wxTextCtrl(r.panel, wxID_ANY, name, wxDefaultPosition, FromDIP(wxSize(130, -1)));
             r.name->Bind(wxEVT_TEXT, [this](wxCommandEvent&) { notify(); });
-            sizer->Add(r.name, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
-
-            // Type column: per-row dropdown to select Copy / Mirror / Split. Drives
-            // the topology interpretation (zone/ghost aggregation, multi-color
-            // validation) — see imex_mode_type_for and consumers.
-            wxArrayString choice_labels;
-            for (const auto& [label, _key] : type_choices()) choice_labels.Add(label);
-            r.type_choice = new wxChoice(r.panel, wxID_ANY, wxDefaultPosition,
-                                         FromDIP(wxSize(80, -1)), choice_labels);
-            r.type_choice->SetSelection(type_choice_index(type));
-            r.type_choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent&) { notify(); });
-            sizer->Add(r.type_choice, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
         }
 
         auto* grid_panel = new wxPanel(r.panel, wxID_ANY);
@@ -4861,9 +4788,9 @@ private:
                                  wxDefaultPosition, FromDIP(wxSize(220, 54)), wxTE_MULTILINE);
         r.gcode->Bind(wxEVT_TEXT, [this](wxCommandEvent&) { notify(); });
 
-        // r.name and r.type_choice were added to the sizer in the non-primary branch
-        // above (right after creation, alongside the type dropdown). Here we add the
-        // tool grid and gcode columns common to every row.
+        if (!is_primary) {
+            sizer->Add(r.name, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
+        }
         sizer->Add(grid_panel, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
         sizer->Add(r.gcode,   1, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(4));
 
@@ -4980,8 +4907,6 @@ private:
         auto* p_names  = parent->option<ConfigOptionStrings>("imex_mode_names");
         auto* p_tools  = parent->option<ConfigOptionStrings>("imex_mode_active_tools");
         auto* p_gcodes = parent->option<ConfigOptionStrings>("imex_mode_gcodes");
-        auto* p_types  = parent->option<ConfigOptionStrings>("imex_mode_types");
-        const std::vector<std::string> empty_strings;
         for (size_t i = 0; i < m_rows.size(); ++i) {
             Row& r = m_rows[i];
             if (r.panel != panel) continue;
@@ -4990,13 +4915,6 @@ private:
                 r.name->ChangeValue(from_u8(p_names->values[i]));
             if (p_gcodes && i < p_gcodes->values.size())
                 r.gcode->ChangeValue(from_u8(p_gcodes->values[i]));
-            if (!r.is_primary && r.type_choice) {
-                const std::string parent_type = imex_mode_type_for(
-                    p_names->values[i],
-                    p_names->values,
-                    p_types ? p_types->values : empty_strings);
-                r.type_choice->SetSelection(type_choice_index(parent_type));
-            }
             if (p_tools && i < p_tools->values.size()) {
                 // Reapply tool states from the parent's serialized form. all_tool_states
                 // is the source of truth for round-tripping; rebuild it then re-paint
@@ -5677,11 +5595,10 @@ if (is_marlin_flavor)
                 });
                 m_imex_modes_ctrl->load_from_config(*m_config);
                 m_imex_modes_ctrl->on_change = [this]() {
-                    auto [names, tools, gcodes, types] = m_imex_modes_ctrl->get_mode_data();
+                    auto [names, tools, gcodes] = m_imex_modes_ctrl->get_mode_data();
                     m_config->set_key_value("imex_mode_names",        new ConfigOptionStrings(names));
                     m_config->set_key_value("imex_mode_active_tools", new ConfigOptionStrings(tools));
                     m_config->set_key_value("imex_mode_gcodes",       new ConfigOptionStrings(gcodes));
-                    m_config->set_key_value("imex_mode_types",        new ConfigOptionStrings(types));
                     update_dirty();
                     on_value_change("imex_mode_names", std::string(""));
                 };
