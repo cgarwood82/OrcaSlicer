@@ -1187,12 +1187,19 @@ void PartPlate::calc_imex_ghosts()
                 // ghost X motion against primary serves no collision purpose and
                 // makes the ghost drift off-bed when primary drags. Translate 1:1
                 // with primary (copy-style position) and bake the X-flip into the
-                // mesh-local frame so geometry still reads as mirrored. Equivalent
-                // to: ghost_xf = Translate(0, gantry_y, 0) * inst_world * X-flip.
+                // mesh-local frame so geometry still reads as mirrored.
+                //
+                // Flip pivots on the mesh's bbox center, not its local origin —
+                // models whose local origin sits at a corner (calibration cubes,
+                // STL imports anchored at min) would otherwise shift left by 2x
+                // the bbox-center offset.
                 const Vec2d target_off = center_for(phys);
+                const Vec3d bc = mo->raw_mesh_bounding_box().center();
                 ghost_xf = inst_world;
                 ghost_xf.linear() = ghost_xf.linear()
                                     * Eigen::DiagonalMatrix<double, 3>(-1.0, 1.0, 1.0);
+                ghost_xf.translation() += inst_world.linear()
+                                          * Vec3d(2.0 * bc.x(), 0.0, 0.0);
                 ghost_xf.translation().y() += target_off.y() - primary_off.y();
             } else {
                 const auto [pri_center, gantry] = resolve_centers(phys);
@@ -1309,11 +1316,15 @@ void PartPlate::update_imex_ghost_transforms(
         if (aggregated_mirror) {
             // Span aggregation: drop X reflection — gantries don't share an X rail
             // so reflecting motion serves no collision purpose. Translate 1:1 in X
-            // and bake X-flip into mesh-local frame so geometry still mirrors.
+            // and bake X-flip into mesh-local frame, pivoting on the bbox center so
+            // off-origin meshes don't shift sideways. Same math as calc_imex_ghosts.
             const Vec2d target_off = center_for(head);
+            const Vec3d bc = mo->raw_mesh_bounding_box().center();
             ghost_xf = primary_xf;
             ghost_xf.linear() = ghost_xf.linear()
                                 * Eigen::DiagonalMatrix<double, 3>(-1.0, 1.0, 1.0);
+            ghost_xf.translation() += primary_xf.linear()
+                                      * Vec3d(2.0 * bc.x(), 0.0, 0.0);
             ghost_xf.translation().y() += target_off.y() - primary_off.y();
         } else {
             const auto [pri_center, gantry] = resolve_centers(head);
