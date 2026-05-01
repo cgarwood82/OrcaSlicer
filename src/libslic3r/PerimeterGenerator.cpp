@@ -1729,8 +1729,12 @@ void PerimeterGenerator::process_no_bridge(Surfaces& all_surfaces, coord_t perim
             //compute our unsupported surface
             ExPolygons unsupported = diff_ex(last, *this->lower_slices, ApplySafetyOffset::Yes);
             if (!unsupported.empty()) {
-                //remove small overhangs
-                ExPolygons unsupported_filtered = offset2_ex(unsupported, double(-perimeter_spacing), double(perimeter_spacing));
+                // remove small overhangs (when using chbFilled we need to be less aggressive in removing small overhangs,
+                // to avoid affecting bridging detection.)
+                const int  outset_divisor       = this->config->counterbore_hole_bridging.value == chbFilled ? 2 : 1;
+                ExPolygons unsupported_filtered = offset2_ex(unsupported, double(-perimeter_spacing),
+                                                             double(perimeter_spacing) / outset_divisor);
+
                 if (!unsupported_filtered.empty()) {
                     //to_draw.insert(to_draw.end(), last.begin(), last.end());
                     //extract only the useful part of the lower layer. The safety offset is really needed here.
@@ -1773,7 +1777,7 @@ void PerimeterGenerator::process_no_bridge(Surfaces& all_surfaces, coord_t perim
                                     }
                                 }
                                 unsupported_filtered = intersection_ex(last,
-                                                                       offset2_ex(unsupported_filtered, double(-perimeter_spacing / 2), double(bridged_infill_margin + perimeter_spacing / 2)));
+                                                                       offset_ex(unsupported_filtered, 0.5 * double(bridged_infill_margin)));
                                 if (this->config->counterbore_hole_bridging.value == chbFilled) {
                                     for (ExPolygon& expol : unsupported_filtered) {
                                         //check if the holes won't be covered by the upper layer
@@ -1825,6 +1829,12 @@ void PerimeterGenerator::process_no_bridge(Surfaces& all_surfaces, coord_t perim
                                 }
                                 //TODO: add other polys as holes inside this one (-margin)
                             } else if (/*this->config->counterbore_hole_bridging.value == chbBridgesOverhangs || */this->config->counterbore_hole_bridging.value == chbBridges) {
+                                // Partially bridged counterbore handling should not rewrite generic bridge islands
+                                // because by doing so regular bridges will lose their overhang-wall perimeters.
+                                if (surface->expolygon.holes.empty()) {
+                                    unsupported_filtered.clear(); // "Partially bridged" only applies to hole-bearing bridge islands. 
+                                    continue;
+                                }
                                 //simplify to avoid most of artefacts from printing lines.
                                 ExPolygons bridgeable_simplified;
                                 for (ExPolygon& poly : bridgeable) {
