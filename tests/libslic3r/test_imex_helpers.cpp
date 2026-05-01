@@ -130,12 +130,12 @@ TEST_CASE("imex_multicolor_block_reason — single-color prints never block", "[
 
 TEST_CASE("imex_multicolor_block_reason — IDEX (1 tool per gantry) blocks multi-color", "[IMEX]") {
     // Two physical heads, each on its own gantry: tools_per_gantry=1, primary=T0
-    // on gantry 0, copy=T1 on gantry 1. Primary's gantry has only 1 active tool,
-    // so there's no within-gantry toolchange path. Block.
+    // on gantry 0, copy=T1 on gantry 1. Primary's gantry can never carry a Span
+    // partner (only 1 tool slot), so multicolor in this mode is never declarable.
     auto pem = make_pem({0, 1});
     const std::string reason = imex_multicolor_block_reason("copy", "0:P,1:C", 1, {0, 1}, pem);
     REQUIRE_FALSE(reason.empty());
-    REQUIRE_THAT(reason, Catch::Matchers::ContainsSubstring("primary tool's gantry"));
+    REQUIRE_THAT(reason, Catch::Matchers::ContainsSubstring("Span tool"));
 }
 
 TEST_CASE("imex_multicolor_block_reason — single-gantry IMEX mode blocks multi-color", "[IMEX]") {
@@ -153,20 +153,31 @@ TEST_CASE("imex_multicolor_block_reason — single-gantry IMEX mode blocks multi
 
 TEST_CASE("imex_multicolor_block_reason — IQEX 2-tool-active mode blocks multi-color", "[IMEX]") {
     // 2x2 IQEX, mode has T0 primary + T2 copy (one tool per gantry, different
-    // gantries). Primary's gantry (gantry 0) has only T0 active → no within-gantry
-    // swap target. Block.
+    // gantries). No Span on primary's gantry → multicolor partner not declared. Block.
     auto pem = make_pem({0, 1, 2, 3});
     const std::string reason = imex_multicolor_block_reason("copy", "0:P,2:C", 2, {0, 2}, pem);
     REQUIRE_FALSE(reason.empty());
-    REQUIRE_THAT(reason, Catch::Matchers::ContainsSubstring("primary tool's gantry"));
+    REQUIRE_THAT(reason, Catch::Matchers::ContainsSubstring("Span tool"));
 }
 
-TEST_CASE("imex_multicolor_block_reason — IQEX 4-tool-active multi-color allowed", "[IMEX]") {
-    // 2x2 IQEX, all four tools active in the mode: T0 primary + T1 also on gantry 0,
-    // T2/T3 on gantry 1 mirroring. Primary's gantry has 2 tools active → within-
-    // gantry toolchange topology is present. Used filaments {0, 1} both on gantry 0.
+TEST_CASE("imex_multicolor_block_reason — IQEX 4-tool independent copies block multi-color", "[IMEX]") {
+    // 2x2 IQEX, T0:P,T1:C,T2:M,T3:M — user's real-world 4-independent-copies job.
+    // No Span on primary's gantry: T1 is an independent copy, not a multicolor
+    // partner, so multicolor here would be incoherent (T1 prints its own object,
+    // it can't sync color changes with T0). Block.
     auto pem = make_pem({0, 1, 2, 3});
-    REQUIRE(imex_multicolor_block_reason("copy", "0:P,1:C,2:M,3:M", 2, {0, 1}, pem).empty());
+    const std::string reason = imex_multicolor_block_reason("copy", "0:P,1:C,2:M,3:M", 2, {0, 1}, pem);
+    REQUIRE_FALSE(reason.empty());
+    REQUIRE_THAT(reason, Catch::Matchers::ContainsSubstring("Span tool"));
+}
+
+TEST_CASE("imex_multicolor_block_reason — IQEX paired-gantry multicolor allowed with Span", "[IMEX]") {
+    // 2x2 IQEX, T0:P,T1:S,T2:M,T3:M — Span on T1 declares the within-gantry multicolor
+    // partner; T2/T3 mirror with column-pairing T2↔T0, T3↔T1. The slaved gantry can
+    // follow the primary's mid-print T0↔T1 toolchange because both colors live on the
+    // same gantry. Allowed.
+    auto pem = make_pem({0, 1, 2, 3});
+    REQUIRE(imex_multicolor_block_reason("copy", "0:P,1:S,2:M,3:M", 2, {0, 1}, pem).empty());
 }
 
 TEST_CASE("imex_multicolor_block_reason — MMU lane sharing blocks multi-color", "[IMEX]") {
@@ -536,4 +547,101 @@ TEST_CASE("resolve_filament_for_head — no routing returns -1 (ghost color fall
     // Plate override for an unrouted head still resolves (user's explicit choice wins).
     std::map<int,int> override_on_5 = {{5, 7}};
     REQUIRE(resolve_filament_for_head(override_on_5, pem, 5) == 6);
+}
+
+TEST_CASE("parse_imex_active_tools — Span role parsed from S suffix", "[IMEX]") {
+    auto out = parse_imex_active_tools("0:P,1:S,2:M,3:M");
+    REQUIRE(out.size() == 4);
+    REQUIRE(out[0].first == 0);
+    REQUIRE(out[0].second == ImexRole::Primary);
+    REQUIRE(out[1].first == 1);
+    REQUIRE(out[1].second == ImexRole::Span);
+    REQUIRE(out[2].first == 2);
+    REQUIRE(out[2].second == ImexRole::Mirror);
+    REQUIRE(out[3].first == 3);
+    REQUIRE(out[3].second == ImexRole::Mirror);
+}
+
+TEST_CASE("parse_imex_active_tools — Span suffix whitespace tolerant", "[IMEX]") {
+    auto out = parse_imex_active_tools("  0 : P , 1 : S ");
+    REQUIRE(out.size() == 2);
+    REQUIRE(out[1].second == ImexRole::Span);
+}
+
+TEST_CASE("group_imex_active_tools_by_gantry — paired-gantry mc-mirror aggregates", "[IMEX]") {
+    // 2x2 IQEX, primary T0, T1 declared Span (multicolor partner on primary's gantry),
+    // T2/T3 mirror with column-pairing T2↔T0 and T3↔T1.
+    auto g = group_imex_active_tools_by_gantry("0:P,1:S,2:M,3:M", 2);
+    REQUIRE(g.primary_phys == 0);
+    REQUIRE(g.primary_gantry == 0);
+    REQUIRE(g.span_on_primary);
+    REQUIRE(g.groups.size() == 2);
+
+    REQUIRE(g.groups[0].gantry_index == 0);
+    REQUIRE_FALSE(g.groups[0].aggregate);  // primary's gantry never aggregates
+    REQUIRE(g.groups[0].tools.size() == 2);
+
+    REQUIRE(g.groups[1].gantry_index == 1);
+    REQUIRE(g.groups[1].aggregate);
+    REQUIRE(g.groups[1].representative_phys == 2);  // column-paired to primary T0
+    REQUIRE(g.groups[1].representative_role == ImexRole::Mirror);
+}
+
+TEST_CASE("group_imex_active_tools_by_gantry — 4 independent copies (no Span) stay per-tool", "[IMEX]") {
+    // User's real-world 4-copy job. Same active_tools shape as the mc-mirror case but no
+    // Span marker → each tool keeps its own ghost + zone. This is the disambiguation that
+    // motivates the Span tile state.
+    auto g = group_imex_active_tools_by_gantry("0:P,1:C,2:M,3:M", 2);
+    REQUIRE_FALSE(g.span_on_primary);
+    REQUIRE(g.groups.size() == 2);
+    REQUIRE_FALSE(g.groups[0].aggregate);
+    REQUIRE_FALSE(g.groups[1].aggregate);
+}
+
+TEST_CASE("group_imex_active_tools_by_gantry — non-primary gantry with single tool stays per-tool", "[IMEX]") {
+    // 2-tool mirror on 2x2 IQEX (T0 primary, T2 mirror) — even with Span elsewhere on
+    // primary's gantry, a 1-tool non-primary gantry has nothing to aggregate.
+    auto g = group_imex_active_tools_by_gantry("0:P,1:S,2:M", 2);
+    REQUIRE(g.span_on_primary);
+    REQUIRE(g.groups.size() == 2);
+    REQUIRE(g.groups[1].gantry_index == 1);
+    REQUIRE(g.groups[1].tools.size() == 1);
+    REQUIRE_FALSE(g.groups[1].aggregate);
+}
+
+TEST_CASE("group_imex_active_tools_by_gantry — mixed-role non-primary gantry falls back", "[IMEX]") {
+    // T2:C, T3:M on the same non-primary gantry — user explicitly authored two distinct
+    // topologies for that gantry. Aggregation would lose information; stay per-tool.
+    auto g = group_imex_active_tools_by_gantry("0:P,1:S,2:C,3:M", 2);
+    REQUIRE(g.span_on_primary);
+    REQUIRE(g.groups.size() == 2);
+    REQUIRE_FALSE(g.groups[1].aggregate);
+}
+
+TEST_CASE("group_imex_active_tools_by_gantry — IDEX (tpg=1) never aggregates", "[IMEX]") {
+    // IDEX has 1 tool per gantry by definition — primary's gantry has no Span partner,
+    // and non-primary gantries each have 1 tool. Aggregation never triggers.
+    auto g = group_imex_active_tools_by_gantry("0:P,1:M", 1);
+    REQUIRE_FALSE(g.span_on_primary);
+    REQUIRE(g.groups.size() == 2);
+    REQUIRE_FALSE(g.groups[0].aggregate);
+    REQUIRE_FALSE(g.groups[1].aggregate);
+}
+
+TEST_CASE("group_imex_active_tools_by_gantry — empty / no primary returns empty grouping", "[IMEX]") {
+    auto g = group_imex_active_tools_by_gantry("", 2);
+    REQUIRE(g.primary_phys == -1);
+    REQUIRE(g.groups.empty());
+}
+
+TEST_CASE("group_imex_active_tools_by_gantry — column pairing picks correct representative", "[IMEX]") {
+    // Primary at T1 (col=1, gantry=0). On gantry 1, the column-pair is T3 (col=1, gantry=1).
+    // Representative for gantry 1 must be T3, not T2 — drives mirror geometry through
+    // the column-paired tool's role.
+    auto g = group_imex_active_tools_by_gantry("0:S,1:P,2:M,3:M", 2);
+    REQUIRE(g.primary_phys == 1);
+    REQUIRE(g.span_on_primary);
+    REQUIRE(g.groups.size() == 2);
+    REQUIRE(g.groups[1].gantry_index == 1);
+    REQUIRE(g.groups[1].representative_phys == 3);  // column-paired to primary T1
 }

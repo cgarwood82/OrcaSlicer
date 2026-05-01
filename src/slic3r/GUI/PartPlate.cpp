@@ -644,13 +644,39 @@ void PartPlate::calc_imex_zones()
             m_imex_primary_head = idx; break; }
     }
 
+    // Per-gantry grouping drives Span-based aggregation. When the mode declares a
+    // Span partner on primary's gantry, non-primary gantries with multiple same-role
+    // tools collapse to one cell each (placed at primary's column so has_col_sep
+    // stays false and make_boxes expands the cell into a full-X row-strip).
+    // Mixed-role / single-tool / no-Span configurations keep per-tool cells.
+    const ImexGantryGrouping grouping =
+        group_imex_active_tools_by_gantry(active_tools_str, n_cols);
+    std::map<int, const ImexGantryGroup*> group_by_gantry;
+    for (const auto& grp : grouping.groups)
+        group_by_gantry[grp.gantry_index] = &grp;
+
     // Separate copy and mirror secondary cells using physical coordinates
     std::set<std::pair<int,int>> copy_cells, mirror_cells;
     for (auto& [idx, state] : tool_states) {
-        auto [c, r] = tool_to_phys(idx);
-        if (c == pri_col && r == pri_row) continue; // skip primary
-        if (state == 2) copy_cells.insert({c, r});
-        else if (state == 3) mirror_cells.insert({c, r});
+        if (state == 1) continue;  // primary handled separately
+
+        const int phys_gantry = idx / n_cols;
+        auto git = group_by_gantry.find(phys_gantry);
+        const ImexGantryGroup* grp = (git == group_by_gantry.end()) ? nullptr : git->second;
+
+        if (grp && grp->aggregate) {
+            // Only the representative contributes a cell; non-reps are folded into
+            // the same row-strip and skipped entirely.
+            if (idx != grp->representative_phys) continue;
+            auto [rep_c, r] = tool_to_phys(idx);
+            (void)rep_c;  // intentionally discarded — aggregated cell pins to pri_col
+            if      (state == 2) copy_cells.insert({pri_col, r});
+            else if (state == 3) mirror_cells.insert({pri_col, r});
+        } else {
+            auto [c, r] = tool_to_phys(idx);
+            if      (state == 2) copy_cells.insert({c, r});
+            else if (state == 3) mirror_cells.insert({c, r});
+        }
     }
 
     // All active secondary cells combined (for separation axis computation)
@@ -854,6 +880,12 @@ void PartPlate::calc_imex_zones()
     // Determine which directions have mirror secondaries adjacent to the primary.
     // Only mirror tools can cause carriage collisions — they move toward each other.
     // Copy tools always move in the same direction, so no collision strip is needed.
+    //
+    // Both axes require zone-adjacent AND same row/column on the OTHER axis: a mirror
+    // diagonally offset from primary (different row AND different column) can't collide
+    // with primary's carriage on either axis since the gantries don't overlap there.
+    // Without these checks, paired-gantry mc-mirror (`0:P,1:S,2:M,3:M`) would draw a
+    // spurious right-edge strip from T3 even though T3 lives on the other gantry's row.
     bool has_right_sec = false, has_left_sec  = false;
     bool has_top_sec   = false, has_bottom_sec = false;
     for (auto& [idx, state] : tool_states) {
@@ -861,9 +893,9 @@ void PartPlate::calc_imex_zones()
         auto [c, r] = tool_to_phys(idx);
         int zc = col_to_zone.count(c) ? col_to_zone.at(c) : -1;
         int zr = row_to_zone.count(r) ? row_to_zone.at(r) : -1;
-        // X-boundary strips: mirror in the zone immediately adjacent to the primary zone.
-        if (zc == pri_col_k + 1) has_right_sec = true;
-        if (zc == pri_col_k - 1) has_left_sec  = true;
+        // X-boundary strips: mirror zone-adjacent in X, same physical row as primary.
+        if (zr == pri_row_k && zc == pri_col_k + 1) has_right_sec = true;
+        if (zr == pri_row_k && zc == pri_col_k - 1) has_left_sec  = true;
         // Y-boundary strips: mirror zone-adjacent in Y, same physical column as primary.
         if (zr == pri_row_k + 1 && c == pri_col) has_top_sec    = true;
         if (zr == pri_row_k - 1 && c == pri_col) has_bottom_sec = true;
@@ -1056,6 +1088,31 @@ void PartPlate::calc_imex_ghosts()
 
     const auto heads = parse_imex_active_tools(active_tools_str);
 
+    // When primary's gantry has a Span tool, paired-gantry aggregation means each
+    // non-primary gantry is represented by a single ghost — its column-paired rep —
+    // so non-rep tools on aggregated gantries are skipped. This single source of
+    // pairing truth keeps ghost emission and zone aggregation in lockstep.
+    int tpg = 1;
+    if (auto* tpg_opt = wxGetApp().preset_bundle->printers.get_edited_preset()
+                            .config.option<ConfigOptionInt>("imex_tools_per_gantry"))
+        tpg = std::max(1, tpg_opt->value);
+    const ImexGantryGrouping grouping =
+        group_imex_active_tools_by_gantry(active_tools_str, tpg);
+    auto is_aggregated = [&](int phys) -> bool {
+        const int g = phys / tpg;
+        for (const auto& grp : grouping.groups)
+            if (grp.gantry_index == g) return grp.aggregate;
+        return false;
+    };
+    auto skip_for_aggregation = [&](int phys) -> bool {
+        const int g = phys / tpg;
+        for (const auto& grp : grouping.groups) {
+            if (grp.gantry_index != g) continue;
+            return grp.aggregate && phys != grp.representative_phys;
+        }
+        return false;
+    };
+
     // Zone centers are the source of truth for ghost placement: they come from the
     // same grid math that paints the colored secondary zones, so a ghost always lands
     // in its own tool's zone. extruder_offset is physical-nozzle data and is left at
@@ -1066,6 +1123,25 @@ void PartPlate::calc_imex_ghosts()
         return (it == m_imex_head_zone_centers.end()) ? Vec2d::Zero() : it->second;
     };
     const Vec2d primary_off = center_for(primary_phys);
+
+    // For aggregated gantries the zone is a full-X row strip, so mirror has to
+    // reflect across the bed centerline (not primary's column-aligned center) and
+    // copy translates purely along Y. Compose primary_zone_center + gantry_offset
+    // to land each role correctly inside the strip.
+    auto bed_ext = get_extents(m_shape);
+    const double bed_x_center = 0.5 * (bed_ext.min(0) + bed_ext.max(0));
+    auto resolve_centers = [&](int phys) -> std::pair<Vec2d, Vec2d> {
+        const Vec2d target_off = center_for(phys);
+        if (!is_aggregated(phys)) {
+            // Per-tool: target stays at its column-aligned zone center.
+            return {primary_off, target_off - primary_off};
+        }
+        // Aggregated: shift the X frame onto bed centerline so mirror reflects
+        // across the whole bed and copy stays at primary's X within the strip.
+        const Vec2d aggregated_primary{bed_x_center, primary_off.y()};
+        const Vec2d aggregated_target {bed_x_center, target_off.y()};
+        return {aggregated_primary, aggregated_target - aggregated_primary};
+    };
 
     constexpr float GHOST_ALPHA = 0.55f;
 
@@ -1101,19 +1177,38 @@ void PartPlate::calc_imex_ghosts()
         for (const auto& [phys, role] : heads) {
             if (phys == primary_phys) continue;
             if (phys >= IMEX_GHOST_MAX_HEADS) continue;
+            if (role == ImexRole::Span) continue;  // within-gantry partner; primary's zone covers it
+            if (skip_for_aggregation(phys)) continue;  // non-rep on an aggregated gantry
 
-            const Vec2d gantry = center_for(phys) - primary_off;
-            // Mirror reflects about the zone-boundary plane through the primary zone
-            // center, so the ghost lands at the mirrored position within the target
-            // zone and drag motion inverts X while Y tracks 1:1. Copy ignores it.
-            const Transform3d head_xf = imex_head_transform(
-                primary_phys, phys, role, gantry, primary_off);
+            const bool aggregated_mirror = is_aggregated(phys) && role == ImexRole::Mirror;
+            Transform3d ghost_xf;
+            if (aggregated_mirror) {
+                // Span aggregation: gantries don't share an X rail, so reflecting
+                // ghost X motion against primary serves no collision purpose and
+                // makes the ghost drift off-bed when primary drags. Translate 1:1
+                // with primary (copy-style position) and bake the X-flip into the
+                // mesh-local frame so geometry still reads as mirrored. Equivalent
+                // to: ghost_xf = Translate(0, gantry_y, 0) * inst_world * X-flip.
+                const Vec2d target_off = center_for(phys);
+                ghost_xf = inst_world;
+                ghost_xf.linear() = ghost_xf.linear()
+                                    * Eigen::DiagonalMatrix<double, 3>(-1.0, 1.0, 1.0);
+                ghost_xf.translation().y() += target_off.y() - primary_off.y();
+            } else {
+                const auto [pri_center, gantry] = resolve_centers(phys);
+                // Per-tool mirror still reflects about pri_center.x + gantry.x/2 so
+                // each individual mirror lands inside its own zone. Copy translates by
+                // `gantry`; aggregated copy resolves gantry.x to 0 → pure-Y translate.
+                const Transform3d head_xf = imex_head_transform(
+                    primary_phys, phys, role, gantry, pri_center);
+                ghost_xf = head_xf * inst_world;
+            }
 
             ColorRGBA color = get_imex_head_filament_color(phys);
             color.a(GHOST_ALPHA);
 
             auto ghost = std::make_unique<GLVolume>(color);
-            ghost->set_instance_transformation(head_xf * inst_world);
+            ghost->set_instance_transformation(ghost_xf);
             ghost->force_transparent    = 1;
             ghost->force_native_color   = 1;
             ghost->disabled             = 1;  // skip selection path
@@ -1151,6 +1246,32 @@ void PartPlate::update_imex_ghost_transforms(
     };
     const Vec2d primary_off = center_for(primary_phys);
 
+    // Same aggregation-aware center resolution as calc_imex_ghosts uses, so live
+    // drags reflect the ghost across bed centerline (not the rep's column-aligned
+    // center) when the gantry is aggregated by Span.
+    int tpg = 1;
+    if (auto* tpg_opt = wxGetApp().preset_bundle->printers.get_edited_preset()
+                            .config.option<ConfigOptionInt>("imex_tools_per_gantry"))
+        tpg = std::max(1, tpg_opt->value);
+    const ImexGantryGrouping grouping =
+        group_imex_active_tools_by_gantry(active_tools_str, tpg);
+    auto is_aggregated = [&](int phys) -> bool {
+        const int g = phys / tpg;
+        for (const auto& grp : grouping.groups)
+            if (grp.gantry_index == g) return grp.aggregate;
+        return false;
+    };
+    auto bed_ext = get_extents(m_shape);
+    const double bed_x_center = 0.5 * (bed_ext.min(0) + bed_ext.max(0));
+    auto resolve_centers = [&](int phys) -> std::pair<Vec2d, Vec2d> {
+        const Vec2d target_off = center_for(phys);
+        if (!is_aggregated(phys))
+            return {primary_off, target_off - primary_off};
+        const Vec2d ap{bed_x_center, primary_off.y()};
+        const Vec2d at{bed_x_center, target_off.y()};
+        return {ap, at - ap};
+    };
+
     // Build a phys → role map once so the per-ghost loop is a lookup, not a reparse.
     std::map<int, ImexRole> role_by_phys;
     for (const auto& [phys, role] : parse_imex_active_tools(active_tools_str))
@@ -1182,13 +1303,25 @@ void PartPlate::update_imex_ghost_transforms(
             primary_xf = mo->instances[inst_idx]->get_matrix();
         }
 
-        const Vec2d gantry = center_for(head) - primary_off;
-        // Mirror reflects about the zone-boundary plane through the primary zone
-        // center, so the ghost lands at the mirrored position within the target
-        // zone and drag motion inverts X while Y tracks 1:1. Copy ignores it.
-        const Transform3d head_xf = imex_head_transform(
-            primary_phys, head, role_for(head), gantry, primary_off);
-        ghost->set_instance_transformation(head_xf * primary_xf);
+        const ImexRole role = role_for(head);
+        const bool aggregated_mirror = is_aggregated(head) && role == ImexRole::Mirror;
+        Transform3d ghost_xf;
+        if (aggregated_mirror) {
+            // Span aggregation: drop X reflection — gantries don't share an X rail
+            // so reflecting motion serves no collision purpose. Translate 1:1 in X
+            // and bake X-flip into mesh-local frame so geometry still mirrors.
+            const Vec2d target_off = center_for(head);
+            ghost_xf = primary_xf;
+            ghost_xf.linear() = ghost_xf.linear()
+                                * Eigen::DiagonalMatrix<double, 3>(-1.0, 1.0, 1.0);
+            ghost_xf.translation().y() += target_off.y() - primary_off.y();
+        } else {
+            const auto [pri_center, gantry] = resolve_centers(head);
+            const Transform3d head_xf = imex_head_transform(
+                primary_phys, head, role, gantry, pri_center);
+            ghost_xf = head_xf * primary_xf;
+        }
+        ghost->set_instance_transformation(ghost_xf);
     }
 }
 

@@ -4395,8 +4395,13 @@ void TabPrinter::build()
 //   1 = Primary   (green)  — the tool the slicer generates paths for
 //   2 = Copy      (blue)   — firmware duplicates Primary at an offset
 //   3 = Mirror    (amber)  — firmware mirrors Primary about an axis
+//   4 = Span      (yellow) — multicolor partner of Primary on the same gantry;
+//                            declares paired-gantry multicolor topology and
+//                            unlocks the multicolor block at slice time. Only
+//                            offered on tools sharing primary's gantry, and
+//                            only on multi-gantry printers (n_rows >= 2).
 //
-// Active-tools string format: "idx:P,idx:C,idx:M"  (backwards-compat: plain "idx" = Primary)
+// Active-tools string format: "idx:P,idx:C,idx:M,idx:S"  (backwards-compat: plain "idx" = Primary)
 // ---------------------------------------------------------------------------
 class IMEXModesCtrl : public wxPanel {
 public:
@@ -4430,11 +4435,16 @@ public:
         info_panel->SetBackgroundColour(GetBackgroundColour());
         auto* info_sizer = new wxBoxSizer(wxVERTICAL);
 
-        auto* inst = new wxStaticText(info_panel, wxID_ANY,
+        wxString instructions =
             _L("Each mode defines which tool heads participate and their roles. "
                "The Primary tool (green) drives all sliced paths. "
                "Copy (blue) and Mirror (amber) tools follow the Primary at the firmware level. "
-               "Click a tool button to cycle its role — clear the Primary before reassigning it."));
+               "Click a tool button to cycle its role — clear the Primary before reassigning it.");
+        if (m_n_rows >= 2)
+            instructions += " " + _L("Span (yellow) marks a tool on the Primary's gantry as the "
+                                     "multicolor partner — required to enable multi-color printing in "
+                                     "paired-gantry IDEX/IQEX modes.");
+        auto* inst = new wxStaticText(info_panel, wxID_ANY, instructions);
         inst->Wrap(FromDIP(620));
         info_sizer->Add(inst, 0, wxBOTTOM, FromDIP(6));
 
@@ -4442,9 +4452,12 @@ public:
         // matched pairs with their labels regardless of system DPI / font scale,
         // matching the on-hover ghost tooltip swatch's visual weight.
         auto* leg_sizer = new wxBoxSizer(wxHORIZONTAL);
-        struct { int state; const char* label; } legend[] = {
+        struct LegendEntry { int state; const char* label; };
+        std::vector<LegendEntry> legend = {
             {1,"Primary"},{2,"Copy"},{3,"Mirror"}
         };
+        if (m_n_rows >= 2)
+            legend.push_back({4, "Span"});  // only meaningful on multi-gantry printers
         const int swatch_side = info_panel->GetCharHeight();
         for (auto& l : legend) {
             auto* swatch = new wxPanel(info_panel, wxID_ANY, wxDefaultPosition, wxSize(swatch_side, swatch_side));
@@ -4583,8 +4596,9 @@ public:
                 if (colon != std::string::npos) {
                     idx = std::stoi(tok.substr(0, colon));
                     char role = std::toupper((unsigned char)tok[colon + 1]);
-                    if (role == 'C') state = 2;
+                    if      (role == 'C') state = 2;
                     else if (role == 'M') state = 3;
+                    else if (role == 'S') state = 4;
                 } else {
                     idx = std::stoi(tok);
                 }
@@ -4595,18 +4609,25 @@ public:
     }
 
 private:
-    // State 0=inactive, 1=primary, 2=copy, 3=mirror
+    // State 0=inactive, 1=primary, 2=copy, 3=mirror, 4=span
     static wxColour btn_color(int state) {
         switch (state) {
-        case 1:  return wxColour(50,  160, 50);   // green  — Primary
-        case 2:  return wxColour(60,  120, 210);  // blue   — Copy
-        case 3:  return wxColour(210, 130, 20);   // amber  — Mirror
-        default: return wxColour(90,  90,  90);   // grey   — Inactive
+        case 1:  return wxColour(50,  160, 50);   // green   — Primary
+        case 2:  return wxColour(60,  120, 210);  // blue    — Copy
+        case 3:  return wxColour(210, 130, 20);   // amber   — Mirror
+        case 4:  return wxColour(180, 180, 40);   // yellow  — Span
+        default: return wxColour(90,  90,  90);   // grey    — Inactive
         }
     }
     static wxColour btn_fg(int /*state*/) { return *wxWHITE; }
     static const char* state_role(int state) {
-        switch (state) { case 1: return "P"; case 2: return "C"; case 3: return "M"; default: return ""; }
+        switch (state) {
+        case 1:  return "P";
+        case 2:  return "C";
+        case 3:  return "M";
+        case 4:  return "S";
+        default: return "";
+        }
     }
 
     void apply_btn(wxButton* btn, int tool_idx, int state) {
@@ -4754,19 +4775,33 @@ private:
                         for (auto& row_ref : m_rows) {
                             if (row_ref.panel != this_panel) continue;
                             int& st = row_ref.btn_states[btn_pos];
+                            const int tidx = row_ref.btn_tool_idx[btn_pos];
 
-                            // Check if another button already holds the Primary state
+                            // Check if another button already holds the Primary state,
+                            // and locate the primary's gantry row for Span eligibility.
                             bool other_primary = false;
-                            for (int j = 0; j < (int)row_ref.btn_states.size(); ++j)
-                                if (j != btn_pos && row_ref.btn_states[j] == 1) { other_primary = true; break; }
+                            int  primary_gantry = -1;
+                            for (int j = 0; j < (int)row_ref.btn_states.size(); ++j) {
+                                if (row_ref.btn_states[j] == 1) {
+                                    if (j != btn_pos) other_primary = true;
+                                    primary_gantry = row_ref.btn_tool_idx[j] / m_n_cols;
+                                }
+                            }
+                            // Span makes sense only on multi-gantry printers, and only
+                            // on a tile sharing primary's gantry (it declares "this tool
+                            // is the within-gantry multicolor partner of Primary").
+                            const bool span_eligible = (m_n_rows >= 2)
+                                                       && (primary_gantry >= 0)
+                                                       && (tidx / m_n_cols == primary_gantry);
 
-                            // Advance state, skipping Primary(1) if another tool is already Primary
-                            st = (st + 1) % 4;
+                            // Cycle: 0 → 1 → 2 → 3 → 4 → 0 with skips.
+                            st = (st + 1) % 5;
                             if (st == 1 && other_primary)
                                 st = 2; // skip Primary → go straight to Copy
+                            if (st == 4 && !span_eligible)
+                                st = 0; // skip Span → wrap to Inactive
 
                             // Keep all_tool_states in sync so off-screen tools are preserved
-                            int tidx = row_ref.btn_tool_idx[btn_pos];
                             if (st == 0)
                                 row_ref.all_tool_states.erase(tidx);
                             else

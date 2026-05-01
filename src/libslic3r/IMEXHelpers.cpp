@@ -86,17 +86,20 @@ std::string imex_multicolor_block_reason(const std::string& parallel_mode,
                "editor and assign a Primary role to one tool.";
     }
 
-    // Walk the active tools once: count how many sit on the primary's gantry, and
-    // collect the set of distinct gantries spanned by the mode. Both the single-
-    // gantry check and the within-gantry-swap check fall out of this walk.
+    // Walk the active tools once: collect the set of distinct gantries spanned by
+    // the mode and check for an explicit Span marker on the primary's gantry.
+    // Span declares "this tool is the multicolor partner of primary on the same
+    // gantry" — without it, two tools on primary's gantry mean two independent
+    // copies, not a within-gantry toolchange topology, which can't carry
+    // multicolor in a parallel mode.
     const int tpg = std::max(1, tools_per_gantry);
     const int primary_gantry = primary_physical / tpg;
-    int tools_on_primary_gantry = 0;
+    bool span_on_primary_gantry = false;
     std::set<int> active_gantries;
     for (const auto& [phys, role] : parse_imex_active_tools(active_tools_str)) {
         active_gantries.insert(phys / tpg);
-        if (phys / tpg == primary_gantry)
-            ++tools_on_primary_gantry;
+        if (phys / tpg == primary_gantry && role == ImexRole::Span)
+            span_on_primary_gantry = true;
     }
 
     // Single-gantry mode: the active tools all sit on one gantry, so no second
@@ -113,15 +116,17 @@ std::string imex_multicolor_block_reason(const std::string& parallel_mode,
                "tools on a second gantry.";
     }
 
-    // Dual-gantry mode but no within-gantry toolchange topology on the primary's
-    // own gantry — the slicer would emit toolchanges between filaments but the
-    // primary gantry has only one active tool, so the swap can't physically happen.
-    if (tools_on_primary_gantry < 2) {
-        return "Multi-color prints in IDEX/IQEX parallel modes require at least two tools "
-               "assigned to the primary tool's gantry — there is no within-gantry "
-               "toolchange path otherwise. Either reduce the print to a single filament, "
-               "switch to Primary mode, or define a parallel mode that pairs two tools on "
-               "the primary gantry.";
+    // Dual-gantry mode but no Span tool on the primary's gantry — the slicer would
+    // emit toolchanges between filaments but the mode doesn't declare a within-gantry
+    // multicolor partner, so the swap can't carry. The user might intend independent
+    // copies (each gantry tool prints its own object) which is incompatible with
+    // mid-print multicolor in a parallel mode.
+    if (!span_on_primary_gantry) {
+        return "Multi-color prints in IDEX/IQEX parallel modes require a Span tool on the "
+               "primary's gantry — without one, the mode doesn't declare a within-gantry "
+               "multicolor partner. Either reduce the print to a single filament, switch to "
+               "Primary mode, or open the printer settings IDEX/IQEX Modes editor and mark a "
+               "tool on the primary's gantry as Span.";
     }
     return {};
 }
@@ -183,9 +188,67 @@ std::vector<std::pair<int, ImexRole>> parse_imex_active_tools(const std::string&
             const std::string r = tok.substr(colon + 1);
             if      (r == "P") role = ImexRole::Primary;
             else if (r == "M") role = ImexRole::Mirror;
+            else if (r == "S") role = ImexRole::Span;
             // "C" and anything else → Copy.
         }
         out.emplace_back(phys, role);
+    }
+    return out;
+}
+
+ImexGantryGrouping group_imex_active_tools_by_gantry(const std::string& active_tools_for_mode,
+                                                     int                tools_per_gantry)
+{
+    ImexGantryGrouping out;
+    const int tpg = std::max(1, tools_per_gantry);
+
+    const int primary = imex_primary_tool_for_mode(active_tools_for_mode);
+    if (primary < 0)
+        return out;
+    out.primary_phys   = primary;
+    out.primary_gantry = primary / tpg;
+
+    const int primary_col = primary % tpg;
+
+    // Bucket every active tool by its gantry index. Skip the primary entry itself
+    // since it carries no role-driven semantics for grouping (it's just the source).
+    std::map<int, std::vector<std::pair<int, ImexRole>>> by_gantry;
+    bool span_seen = false;
+    for (const auto& [phys, role] : parse_imex_active_tools(active_tools_for_mode)) {
+        if (phys < 0) continue;
+        const int g = phys / tpg;
+        by_gantry[g].emplace_back(phys, role);
+        if (g == out.primary_gantry && role == ImexRole::Span)
+            span_seen = true;
+    }
+    out.span_on_primary = span_seen;
+
+    for (auto& [g, tools] : by_gantry) {
+        ImexGantryGroup grp;
+        grp.gantry_index = g;
+        grp.tools        = tools;
+
+        // Pick representative: column-paired to primary if active, else lowest phys.
+        const int paired_phys = g * tpg + primary_col;
+        auto pick = std::find_if(tools.begin(), tools.end(),
+                                 [&](const auto& pr) { return pr.first == paired_phys; });
+        if (pick == tools.end())
+            pick = std::min_element(tools.begin(), tools.end(),
+                                    [](const auto& a, const auto& b) { return a.first < b.first; });
+        grp.representative_phys = pick->first;
+        grp.representative_role = pick->second;
+
+        // Aggregate iff Span is on primary's gantry, this is a non-primary gantry,
+        // it has ≥2 tools, and all those tools share the same role (so the merged
+        // visualization is unambiguous). Mixed-role gantries fall back to per-tool.
+        const bool same_role = std::all_of(tools.begin(), tools.end(),
+            [&](const auto& pr) { return pr.second == grp.representative_role; });
+        grp.aggregate = span_seen
+                        && g != out.primary_gantry
+                        && tools.size() >= 2
+                        && same_role;
+
+        out.groups.push_back(std::move(grp));
     }
     return out;
 }

@@ -111,17 +111,20 @@ bool imex_suppresses_bare_toolchange(const std::string& parallel_mode, unsigned 
 // Multi-color in a parallel mode requires the firmware to swap tools mid-print on the
 // primary gantry while the slaved gantry follows automatically. That works only when
 // every used filament has its own dedicated physical head (no MMU lane sharing) AND
-// the active mode definition assigns at least 2 roles to tools on the primary's gantry
-// (so there's a within-gantry toolchange topology to swap among).
+// the active mode definition explicitly marks a Span tool on the primary's gantry
+// (Span declares "this tool is the within-gantry multicolor partner of Primary"; it
+// disambiguates the multicolor topology from independent same-gantry copies).
 //
 // Catches:
-//   - IDEX (1 tool per gantry): only 1 tool on primary's gantry → blocked
-//   - IQEX 2-tool-active (e.g. T0 primary + T2 copy on different gantries): only 1 tool
-//     on primary's gantry → blocked
+//   - IDEX (1 tool per gantry): primary's gantry can never carry a Span partner → blocked
+//   - IQEX 2-tool-active (e.g. T0 primary + T2 copy on different gantries): no Span on
+//     primary's gantry → blocked
 //   - MMU/AFC sharing among used filaments: multiple used filaments routed to same
 //     physical head → blocked (the slaved gantry can't follow MMU lane swaps)
-//   - IQEX 4-tool-active (T0+T1 on primary gantry, T2+T3 paired): 2 tools on primary's
-//     gantry, no MMU sharing → ALLOWED
+//   - IQEX 4-tool independent copies (T0:P,T1:C,T2:M,T3:M): no Span declared, T1 is an
+//     independent copy → blocked
+//   - IQEX paired-gantry multicolor (T0:P,T1:S,T2:M,T3:M): Span on T1 declares the
+//     multicolor partner, no MMU sharing → ALLOWED
 //
 // Returns empty string for: non-IMEX (empty parallel_mode), Primary mode, single-color
 // prints, or any configuration where multi-color is physically supportable.
@@ -212,7 +215,7 @@ std::vector<int> imex_secondary_logical_slots(const std::vector<int>&   active_p
                                               const std::map<int,int>&  plate_head_filament_map,
                                               const ConfigOptionInts&   pem);
 
-enum class ImexRole { Primary, Copy, Mirror };
+enum class ImexRole { Primary, Copy, Mirror, Span };
 
 // Parses `imex_mode_active_tools[mode]` into a list of (physical_head, role) pairs.
 // Accepted token forms (comma-separated, whitespace-tolerant):
@@ -220,6 +223,10 @@ enum class ImexRole { Primary, Copy, Mirror };
 //   "phys:P"    — Primary
 //   "phys:C"    — Copy
 //   "phys:M"    — Mirror
+//   "phys:S"    — Span (multicolor partner of Primary on the same gantry; only
+//                meaningful on tools sharing primary's gantry, and only on a
+//                multi-gantry printer. Drives the multicolor-allow path and
+//                paired-gantry ghost/zone aggregation.)
 //   "phys:???"  — unknown role suffix, treated as Copy
 // Malformed tokens (unparseable int, negative phys) are skipped.
 // NOTE: the bare-token → Copy default differs from `imex_primary_tool_for_mode`,
@@ -227,6 +234,39 @@ enum class ImexRole { Primary, Copy, Mirror };
 // use that helper. This parser is for call sites that already have the primary
 // in hand and need the full head/role list (e.g. ghost factory/updater).
 std::vector<std::pair<int, ImexRole>> parse_imex_active_tools(const std::string& active_tools_for_mode);
+
+// Per-gantry grouping derived from the active_tools string. The single source of
+// truth for paired-gantry visualization aggregation: when the primary's gantry
+// has at least one Span tool, every non-primary gantry's representative tool
+// stands in for the whole gantry (one ghost, one zone strip). Gantries without
+// the aggregation trigger keep per-tool semantics.
+//
+// `representative_phys` is the column-paired tool to primary on that gantry —
+// i.e. `gantry_index * tools_per_gantry + (primary_phys % tools_per_gantry)` if
+// active, else the lowest active phys on that gantry. Aggregation falls back
+// when tools on the same non-primary gantry carry mixed roles (e.g. one Copy
+// + one Mirror), since the user explicitly authored two distinct topologies.
+struct ImexGantryGroup {
+    int                                     gantry_index = -1;
+    int                                     representative_phys = -1;
+    ImexRole                                representative_role = ImexRole::Copy;
+    bool                                    aggregate = false;  // collapse this gantry to one ghost/zone
+    std::vector<std::pair<int, ImexRole>>   tools;              // every active tool on this gantry
+};
+
+struct ImexGantryGrouping {
+    int                              primary_phys     = -1;
+    int                              primary_gantry   = -1;
+    bool                             span_on_primary  = false;  // any Span tool on primary's gantry
+    std::vector<ImexGantryGroup>     groups;                    // every gantry with ≥1 active tool, sorted by index
+};
+
+// Groups parsed active tools by gantry (`phys / tools_per_gantry`). Aggregation
+// triggers iff `span_on_primary` is true AND a non-primary gantry's tools all
+// carry the same role; mixed-role non-primary gantries fall back to per-tool.
+// Returns an empty grouping when active_tools_str is empty / has no primary.
+ImexGantryGrouping group_imex_active_tools_by_gantry(const std::string& active_tools_for_mode,
+                                                     int                tools_per_gantry);
 
 // World-space transform composed as `head_xf * primary_instance_world` to place a ghost
 // copy of the primary into `target`'s frame under `role`.
