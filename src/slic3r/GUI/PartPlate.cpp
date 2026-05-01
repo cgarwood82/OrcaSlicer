@@ -954,7 +954,11 @@ void PartPlate::calc_imex_zones()
 // adjust the scale.
 std::string PartPlate::build_imex_cache_key() const
 {
-    if (!wxGetApp().preset_bundle)
+    // CLI / headless slice: no GUI_App is initialized, so `wxGetApp()` returns
+    // memory that segfaults on member access. `m_plater` is set only by the GUI
+    // construction path; treat its absence as "no IMEX state to compute" and
+    // return an empty key. Same guard pattern used by calc_imex_ghosts.
+    if (!m_plater || !wxGetApp().preset_bundle)
         return "";
     const DynamicPrintConfig& printer_cfg = wxGetApp().preset_bundle->printers.get_edited_preset().config;
     auto* is_imex_opt = printer_cfg.option<ConfigOptionBool>("is_imex");
@@ -1002,6 +1006,10 @@ void PartPlate::refresh_imex_icon()
 // Called before any collision check AND before rendering so both paths share the same data.
 void PartPlate::ensure_imex_zones()
 {
+    // CLI / headless slice: no GUI_App, no plater, no IMEX state to track. Bail out
+    // before touching `wxGetApp()` (which segfaults without a GUI_App) — placement
+    // checks reach this from the headless 3MF-load path through `check_outside`.
+    if (!m_plater) return;
     std::string cache_key = build_imex_cache_key();
     if (cache_key != m_imex_zones_mode_cache) {
         m_imex_zones_mode_cache = cache_key;
