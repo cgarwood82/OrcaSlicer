@@ -9975,11 +9975,13 @@ static std::vector<wxString> collect_imex_warnings(PartPlate* plate)
     std::vector<wxString> warnings;
     if (!plate) return warnings;
 
-    // Check 1: multi-material conflict (same condition that drives the badge)
-    if (plate->has_imex_multimaterial_conflict())
-        warnings.push_back(_L("Multi-material objects detected — secondary carriages may not behave as expected with multi-material prints."));
-
-    // Checks 2 & 3 only apply when a non-primary parallel mode is active
+    // Multi-material conflicts are now hard-blocked at slice time via
+    // imex_multicolor_block_reason (Print::validate). The pre-slice nanny used to
+    // emit a vague soft warning here, but the hard block surfaces a more
+    // descriptive message at exactly the right moment, so the duplicate warning
+    // was dropped. Bed-temp + filament-type checks below remain useful soft
+    // warnings — they catch user configurations that *will* slice but produce
+    // problematic gcode.
     const std::string mode = plate->get_imex_mode();
     if (mode == kImexPrimaryMode) return warnings;
 

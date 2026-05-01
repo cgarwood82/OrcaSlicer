@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cctype>
+#include <set>
 #include <sstream>
 #include <unordered_set>
 
@@ -77,22 +78,44 @@ std::string imex_multicolor_block_reason(const std::string& parallel_mode,
         }
     }
 
-    // Determine which physical head is the primary in this mode, then count how many
-    // tool roles are assigned to tools on the same gantry. Multi-color requires at
-    // least 2 (so there's a within-gantry toolchange topology).
+    // Determine which physical head is the primary in this mode.
     const int primary_physical = imex_primary_tool_for_mode(active_tools_str);
     if (primary_physical < 0) {
         return "The active IDEX/IQEX mode does not define a primary tool, so multi-color "
                "printing cannot be scheduled. Open the printer settings IDEX/IQEX Modes "
                "editor and assign a Primary role to one tool.";
     }
+
+    // Walk the active tools once: count how many sit on the primary's gantry, and
+    // collect the set of distinct gantries spanned by the mode. Both the single-
+    // gantry check and the within-gantry-swap check fall out of this walk.
     const int tpg = std::max(1, tools_per_gantry);
     const int primary_gantry = primary_physical / tpg;
     int tools_on_primary_gantry = 0;
+    std::set<int> active_gantries;
     for (const auto& [phys, role] : parse_imex_active_tools(active_tools_str)) {
+        active_gantries.insert(phys / tpg);
         if (phys / tpg == primary_gantry)
             ++tools_on_primary_gantry;
     }
+
+    // Single-gantry mode: the active tools all sit on one gantry, so no second
+    // gantry is being copied/mirrored to. The "Copy"/"Mirror" label is decorative
+    // — there's no actual parallel printing happening, just a regular multi-tool
+    // single-gantry print. Multi-color in this configuration is a misconfiguration
+    // (use Primary mode for that), and the user's mode_gcode would still emit
+    // parallel-print firmware setup that doesn't apply here.
+    if (active_gantries.size() < 2) {
+        return "Multi-color in this mode isn't a parallel-print scenario — all of the "
+               "active tools sit on a single gantry, so there's no second gantry being "
+               "copied or mirrored to. Switch the plate to Primary mode for multi-color "
+               "printing on a single gantry, or define an IDEX/IQEX mode that includes "
+               "tools on a second gantry.";
+    }
+
+    // Dual-gantry mode but no within-gantry toolchange topology on the primary's
+    // own gantry — the slicer would emit toolchanges between filaments but the
+    // primary gantry has only one active tool, so the swap can't physically happen.
     if (tools_on_primary_gantry < 2) {
         return "Multi-color prints in IDEX/IQEX parallel modes require at least two tools "
                "assigned to the primary tool's gantry — there is no within-gantry "

@@ -138,6 +138,19 @@ TEST_CASE("imex_multicolor_block_reason — IDEX (1 tool per gantry) blocks mult
     REQUIRE_THAT(reason, Catch::Matchers::ContainsSubstring("primary tool's gantry"));
 }
 
+TEST_CASE("imex_multicolor_block_reason — single-gantry IMEX mode blocks multi-color", "[IMEX]") {
+    // 2x2 IQEX, mode "0:P,1:C" — T0 and T1 both sit on gantry 0 (since
+    // tools_per_gantry=2). The mode label says "copy" but there's no second
+    // gantry being copied to — this is a confused configuration. Multi-color
+    // here is just a regular multi-tool single-gantry print, not an IMEX
+    // parallel print. Block before the slicer wastes effort emitting parallel-
+    // print firmware setup that doesn't apply.
+    auto pem = make_pem({0, 1, 2, 3});
+    const std::string reason = imex_multicolor_block_reason("copy", "0:P,1:C", 2, {0, 1}, pem);
+    REQUIRE_FALSE(reason.empty());
+    REQUIRE_THAT(reason, Catch::Matchers::ContainsSubstring("single gantry"));
+}
+
 TEST_CASE("imex_multicolor_block_reason — IQEX 2-tool-active mode blocks multi-color", "[IMEX]") {
     // 2x2 IQEX, mode has T0 primary + T2 copy (one tool per gantry, different
     // gantries). Primary's gantry (gantry 0) has only T0 active → no within-gantry
