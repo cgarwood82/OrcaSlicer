@@ -7305,18 +7305,19 @@ void GLCanvas3D::_picking_pass_imex_ghosts()
         return tmax >= 0.0;
     };
 
+    // Match _render_imex_ghosts: only hit-test ghosts on the active plate. Picking
+    // through ghosts on background plates would hand the user a stale plate index
+    // for the head-filament popover and let them edit a plate they aren't looking at.
     PartPlateList& ppl = wxGetApp().plater()->get_partplate_list();
-    for (int pi = 0; pi < ppl.get_plate_count(); ++pi) {
-        PartPlate* plate = ppl.get_plate(pi);
-        if (!plate) continue;
-        const auto& ghosts = plate->get_imex_ghost_volumes();
-        if (ghosts.empty()) continue;
+    PartPlate* active_plate = ppl.get_curr_plate();
+    if (active_plate) {
+        const auto& ghosts = active_plate->get_imex_ghost_volumes();
         for (const auto& g : ghosts) {
             if (!g || !g->is_active || !g->picking) continue;
             const BoundingBoxf3 bbox = g->transformed_bounding_box();
             if (ray_hits_bbox(ray_origin, ray_dir, bbox)) {
                 m_hover_ghost_head  = PartPlate::imex_ghost_head_from_composite_id(g->composite_id.object_id);
-                m_hover_ghost_plate = pi;
+                m_hover_ghost_plate = ppl.get_curr_plate_index();
                 return;  // first hit wins
             }
         }
@@ -7355,14 +7356,18 @@ void GLCanvas3D::_render_imex_ghosts()
     shader->set_uniform("print_volume.type", -1);
     shader->set_uniform("slope.actived", false);
 
+    // Only render ghosts for the active plate. Iterating every plate here causes
+    // ghosts from background plates to bleed through into the active scene
+    // (e.g. when entering paint mode), since the GL state is shared across the
+    // whole canvas. Per-plate ghost volumes still live on each PartPlate so they
+    // round-trip through 3MF saves; we just don't draw them when their plate
+    // isn't the one the user is currently looking at.
     PartPlateList& ppl = wxGetApp().plater()->get_partplate_list();
-    for (int pi = 0; pi < ppl.get_plate_count(); ++pi) {
-        PartPlate* plate = ppl.get_plate(pi);
-        if (!plate) continue;
+    PartPlate* active_plate = ppl.get_curr_plate();
+    if (active_plate) {
         // Refresh per-frame so ghost positions reflect the primary's live drag state.
-        plate->update_imex_ghost_transforms(primary_live_xf);
-        const auto& ghosts = plate->get_imex_ghost_volumes();
-        if (ghosts.empty()) continue;
+        active_plate->update_imex_ghost_transforms(primary_live_xf);
+        const auto& ghosts = active_plate->get_imex_ghost_volumes();
         for (const auto& g : ghosts) {
             if (!g || !g->is_active) continue;
             const Transform3d model_matrix = g->world_matrix();
